@@ -353,10 +353,20 @@ func (o Redis) Halt() {
 
 
 func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
+	log.Debugf(
+		"builtin ACL: username=%s topic=%s acc=%d subscribe=%d match=%v",
+		username,
+		topic,
+		acc,
+		MOSQ_ACL_SUBSCRIBE,
+		topics.Match(username+"/#", topic),
+	)
+
 	switch acc {
 	case MOSQ_ACL_SUBSCRIBE, MOSQ_ACL_READ:
 		return topics.Match(username+"/#", topic)
 	}
+
 	return false
 }
 
