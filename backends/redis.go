@@ -239,6 +239,11 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 	if acc == MOSQ_ACL_WRITE {
 		return o.matchCommonWriteAcl(username, clientid, topic)
 	}
+
+	if strings.HasPrefix(topic, "ch/") {
+		return o.matchCheckHashAcl(username, topic)
+	}
+
 	// 개인 topic
 	if o.containsUsername(topic, username) {
 		return o.matchBuiltinAcl(username, topic, acc), nil
@@ -399,4 +404,19 @@ func (o Redis) matchCommonWriteAcl(
 	}
 
 	return false, nil
+}
+
+
+func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
+	value, err := o.conn.HGet(o.ctx, topic, username).Result()
+
+	if err == goredis.Nil {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return value != "", nil
 }
