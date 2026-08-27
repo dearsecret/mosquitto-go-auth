@@ -16,7 +16,8 @@ import (
 
 type RedisClient interface {
 	Get(ctx context.Context, key string) *goredis.StringCmd
-	SMembers(ctx context.Context, key string) *goredis.StringSliceCmd
+	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
+	HGet(ctx context.Context, key, field string) *goredis.StringCmd
 	Ping(ctx context.Context) *goredis.StatusCmd
 	Close() error
 	FlushDB(ctx context.Context) *goredis.StatusCmd
@@ -234,120 +235,69 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 
 //CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
+    var aclKeys []string
+    var commonAclKeys []string
 
-	var acls []string       //User specific acls.
-	var commonAcls []string //Common acls.
+    switch acc {
+    case MOSQ_ACL_SUBSCRIBE:
+        aclKeys = []string{
+            fmt.Sprintf("%s:sacls", username),
+        }
+        commonAclKeys = []string{
+            "common:sacls",
+        }
 
-	//We need to check if client is subscribing, reading or publishing to get correct acls.
-	switch acc {
-	case MOSQ_ACL_SUBSCRIBE:
-		//Get all user subscribe acls.
-		var err error
-		acls, err = o.conn.SMembers(o.ctx, fmt.Sprintf("%s:sacls", username)).Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
+    case MOSQ_ACL_READ:
+        aclKeys = []string{
+            fmt.Sprintf("%s:racls", username),
+            fmt.Sprintf("%s:rwacls", username),
+        }
+        commonAclKeys = []string{
+            "common:racls",
+            "common:rwacls",
+        }
 
-		//Get common subscribe acls.
-		commonAcls, err = o.conn.SMembers(o.ctx, "common:sacls").Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
+    case MOSQ_ACL_WRITE:
+        aclKeys = []string{
+            fmt.Sprintf("%s:wacls", username),
+            fmt.Sprintf("%s:rwacls", username),
+        }
+        commonAclKeys = []string{
+            "common:wacls",
+            "common:rwacls",
+        }
+    }
 
-	case MOSQ_ACL_READ:
-		//Get all user read and readwrite acls.
-		urAcls, err := o.conn.SMembers(o.ctx, fmt.Sprintf("%s:racls", username)).Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-		urwAcls, err := o.conn.SMembers(o.ctx, fmt.Sprintf("%s:rwacls", username)).Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
+    // User-specific ACL
+    for _, key := range aclKeys {
+        matched, err := o.matchAcl(key, topic)
+        if err != nil {
+            return false, err
+        }
 
-		//Get common read and readwrite acls
-		rAcls, err := o.conn.SMembers(o.ctx, "common:racls").Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-		rwAcls, err := o.conn.SMembers(o.ctx, "common:rwacls").Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
+        if matched {
+            return true, nil
+        }
+    }
 
-		acls = make([]string, len(urAcls)+len(urwAcls))
-		acls = append(acls, urAcls...)
-		acls = append(acls, urwAcls...)
+    // Common ACL
+    for _, key := range commonAclKeys {
+        matched, err := o.matchCommonAcl(
+            key,
+            username,
+            clientid,
+            topic,
+        )
+        if err != nil {
+            return false, err
+        }
 
-		commonAcls = make([]string, len(rAcls)+len(rwAcls))
-		commonAcls = append(commonAcls, rAcls...)
-		commonAcls = append(commonAcls, rwAcls...)
-	case MOSQ_ACL_WRITE:
-		//Get all user write and readwrite acls.
-		uwAcls, err := o.conn.SMembers(o.ctx, fmt.Sprintf("%s:wacls", username)).Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-		urwAcls, err := o.conn.SMembers(o.ctx, fmt.Sprintf("%s:rwacls", username)).Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
+        if matched {
+            return true, nil
+        }
+    }
 
-		//Get common write and readwrite acls
-		wAcls, err := o.conn.SMembers(o.ctx, "common:wacls").Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-		rwAcls, err := o.conn.SMembers(o.ctx, "common:rwacls").Result()
-		if err == goredis.Nil {
-			return false, nil
-		} else if err != nil {
-			return false, err
-		}
-
-		acls = make([]string, len(uwAcls)+len(urwAcls))
-		acls = append(acls, uwAcls...)
-		acls = append(acls, urwAcls...)
-
-		commonAcls = make([]string, len(wAcls)+len(rwAcls))
-		commonAcls = append(commonAcls, wAcls...)
-		commonAcls = append(commonAcls, rwAcls...)
-	}
-
-	//Now loop through acls looking for a match.
-	for _, acl := range acls {
-		if topics.Match(acl, topic) {
-			return true, nil
-		}
-	}
-
-	for _, acl := range commonAcls {
-		aclTopic := strings.Replace(acl, "%c", clientid, -1)
-		aclTopic = strings.Replace(aclTopic, "%u", username, -1)
-		if topics.Match(aclTopic, topic) {
-			return true, nil
-		}
-	}
-
-	return false, nil
+    return false, nil
 }
 
 //GetName returns the backend's name
@@ -363,4 +313,74 @@ func (o Redis) Halt() {
 			log.Errorf("Redis cleanup error: %s", err)
 		}
 	}
+}
+
+
+
+func (o Redis) matchCommonAcl(
+    key string,
+    username string,
+    clientid string,
+    topic string,
+) (bool, error) {
+    _, err := o.conn.HGet(o.ctx, key, topic).Result()
+
+    if err == nil {
+        return true, nil
+    }
+
+    if err != goredis.Nil {
+        return false, err
+    }
+
+    acls, err := o.conn.HKeys(o.ctx, key).Result()
+    if err != nil {
+        return false, err
+    }
+
+    for _, acl := range acls {
+        if !strings.Contains(acl, "+") &&
+            !strings.HasSuffix(acl, "/#") &&
+            !strings.Contains(acl, "%u") &&
+            !strings.Contains(acl, "%c") {
+            continue
+        }
+
+        aclTopic := strings.ReplaceAll(acl, "%u", username)
+        aclTopic = strings.ReplaceAll(aclTopic, "%c", clientid)
+
+        if topics.Match(aclTopic, topic) {
+            return true, nil
+        }
+    }
+
+    return false, nil
+}
+
+
+func (o Redis) matchAcl(key, topic string) (bool, error) {
+	_, err := o.conn.HGet(o.ctx, key, topic).Result()
+	if err == nil {
+		return true, nil
+	}
+	if err != goredis.Nil {
+		return false, err
+	}
+	acls, err := o.conn.HKeys(o.ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+
+	for _, acl := range acls {
+		if !strings.Contains(acl, "+") &&
+			!strings.HasSuffix(acl, "/#") {
+			continue
+		}
+
+		if topics.Match(acl, topic) {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
