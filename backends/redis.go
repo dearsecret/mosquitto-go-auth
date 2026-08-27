@@ -235,10 +235,23 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 
 //CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
+	log.Debugf(
+		"checkAcl: username=%s topic=%s clientid=%s acc=%d",
+		username,
+		topic,
+		clientid,
+		acc,
+	)
+
 	// WRITE는 common:wacls만 사용
 	if acc == MOSQ_ACL_WRITE {
 		return o.matchCommonWriteAcl(username, clientid, topic)
 	}
+
+	log.Debugf(
+		"checkAcl containsUsername=%v",
+		o.containsUsername(topic, username),
+	)
 
 	// 개인 topic
 	if o.containsUsername(topic, username) {
@@ -353,18 +366,21 @@ func (o Redis) Halt() {
 
 
 func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
+	matched := topics.Match(username+"/#", topic)
+
 	log.Debugf(
-		"builtin ACL: username=%s topic=%s acc=%d subscribe=%d match=%v",
+		"builtin ACL: username=%s topic=%s acc=%d subscribe=%d pattern=%s match=%v",
 		username,
 		topic,
 		acc,
 		MOSQ_ACL_SUBSCRIBE,
-		topics.Match(username+"/#", topic),
+		username+"/#",
+		matched,
 	)
 
 	switch acc {
 	case MOSQ_ACL_SUBSCRIBE, MOSQ_ACL_READ:
-		return topics.Match(username+"/#", topic)
+		return matched
 	}
 
 	return false
