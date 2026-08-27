@@ -16,8 +16,8 @@ import (
 
 type RedisClient interface {
 	Get(ctx context.Context, key string) *goredis.StringCmd
-	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
 	HGet(ctx context.Context, key, field string) *goredis.StringCmd
+	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
 	Ping(ctx context.Context) *goredis.StatusCmd
 	Close() error
 	FlushDB(ctx context.Context) *goredis.StatusCmd
@@ -235,149 +235,151 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 
 //CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
-    var aclKeys []string
-    var commonAclKeys []string
+	// WRITE는 common:wacls만 사용
+	if acc == MOSQ_ACL_WRITE {
+		return o.matchCommonWriteAcl(username, clientid, topic)
+	}
 
-    switch acc {
-    case MOSQ_ACL_SUBSCRIBE:
-        aclKeys = []string{
-            fmt.Sprintf("%s:sacls", username),
-        }
-        commonAclKeys = []string{
-            "common:sacls",
-        }
+	// 개인 topic
+	if o.containsUsername(topic, username) {
+		return o.matchBuiltinAcl(username, topic, acc), nil
+	}
 
-    case MOSQ_ACL_READ:
-        aclKeys = []string{
-            fmt.Sprintf("%s:racls", username),
-            fmt.Sprintf("%s:rwacls", username),
-        }
-        commonAclKeys = []string{
-            "common:racls",
-            "common:rwacls",
-        }
+	// wildcard subscription
+	if o.isWildcard(topic) {
+		return o.matchCommonWildcardAcl(topic, acc)
+	}
 
-    case MOSQ_ACL_WRITE:
-        aclKeys = []string{
-            fmt.Sprintf("%s:wacls", username),
-            fmt.Sprintf("%s:rwacls", username),
-        }
-        commonAclKeys = []string{
-            "common:wacls",
-            "common:rwacls",
-        }
-    }
+	// 일반 topic → 개인 ACL exact
+	var aclKeys []string
 
-    // User-specific ACL
-    for _, key := range aclKeys {
-        matched, err := o.matchAcl(key, topic)
-        if err != nil {
-            return false, err
-        }
+	switch acc {
+	case MOSQ_ACL_SUBSCRIBE:
+		aclKeys = []string{
+			fmt.Sprintf("%s:sacls", username),
+		}
 
-        if matched {
-            return true, nil
-        }
-    }
+	case MOSQ_ACL_READ:
+		aclKeys = []string{
+			fmt.Sprintf("%s:racls", username),
+			fmt.Sprintf("%s:rwacls", username),
+		}
 
-    // Common ACL
-    for _, key := range commonAclKeys {
-        matched, err := o.matchCommonAcl(
-            key,
-            username,
-            clientid,
-            topic,
-        )
-        if err != nil {
-            return false, err
-        }
+	default:
+		return false, nil
+	}
 
-        if matched {
-            return true, nil
-        }
-    }
-
-    return false, nil
-}
-
-//GetName returns the backend's name
-func (o Redis) GetName() string {
-	return "Redis"
-}
-
-//Halt terminates the connection.
-func (o Redis) Halt() {
-	if o.conn != nil {
-		err := o.conn.Close()
+	for _, key := range aclKeys {
+		matched, err := o.matchAcl(key, topic)
 		if err != nil {
-			log.Errorf("Redis cleanup error: %s", err)
+			return false, err
+		}
+
+		if matched {
+			return true, nil
 		}
 	}
+
+	return false, nil
 }
 
 
-
-func (o Redis) matchCommonAcl(
-    key string,
-    username string,
-    clientid string,
-    topic string,
-) (bool, error) {
-    _, err := o.conn.HGet(o.ctx, key, topic).Result()
-
-    if err == nil {
-        return true, nil
-    }
-
-    if err != goredis.Nil {
-        return false, err
-    }
-
-    acls, err := o.conn.HKeys(o.ctx, key).Result()
-    if err != nil {
-        return false, err
-    }
-
-    for _, acl := range acls {
-        if !strings.Contains(acl, "+") &&
-            !strings.HasSuffix(acl, "/#") &&
-            !strings.Contains(acl, "%u") &&
-            !strings.Contains(acl, "%c") {
-            continue
-        }
-
-        aclTopic := strings.ReplaceAll(acl, "%u", username)
-        aclTopic = strings.ReplaceAll(aclTopic, "%c", clientid)
-
-        if topics.Match(aclTopic, topic) {
-            return true, nil
-        }
-    }
-
-    return false, nil
+func (o Redis) containsUsername(topic, username string) bool {
+	for _, level := range strings.Split(topic, "/") {
+		if level == username {
+			return true
+		}
+	}
+	return false
 }
+
+func (o Redis) isWildcard(topic string) bool {
+	return strings.ContainsAny(topic, "+#")
+}
+
 
 
 func (o Redis) matchAcl(key, topic string) (bool, error) {
 	_, err := o.conn.HGet(o.ctx, key, topic).Result()
+
 	if err == nil {
 		return true, nil
 	}
-	if err != goredis.Nil {
-		return false, err
+
+	if err == goredis.Nil {
+		return false, nil
 	}
+
+	return false, err
+}
+
+
+func (o Redis) matchCommonWildcardAcl(topic string, acc int32) (bool, error) {
+	key := o.getCommonAclKey(acc)
+	if key == "" {
+		return false, nil
+	}
+
 	acls, err := o.conn.HKeys(o.ctx, key).Result()
 	if err != nil {
 		return false, err
 	}
 
 	for _, acl := range acls {
-		if !strings.Contains(acl, "+") &&
-			!strings.HasSuffix(acl, "/#") {
+		if !strings.ContainsAny(acl, "+#") {
 			continue
 		}
 
 		if topics.Match(acl, topic) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+
+func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
+	switch acc {
+	case MOSQ_ACL_SUBSCRIBE, MOSQ_ACL_READ:
+		return topics.Match(username+"/#", topic)
+	}
+	return false
+}
+
+
+func (o Redis) getCommonAclKey(acc int32) string {
+	switch acc {
+	case MOSQ_ACL_SUBSCRIBE:
+		return "common:sacls"
+
+	case MOSQ_ACL_READ:
+		return "common:racls"
+
+	case MOSQ_ACL_WRITE:
+		return "common:wacls"
+
+	default:
+		return ""
+	}
+}
+
+
+func (o Redis) matchCommonWriteAcl(
+	username string,
+	clientid string,
+	topic string,
+) (bool, error) {
+	acls, err := o.conn.HKeys(o.ctx, "common:wacls").Result()
+	if err != nil {
+		return false, err
+	}
+
+	for _, acl := range acls {
+		aclTopic := strings.ReplaceAll(acl, "%u", username)
+		aclTopic = strings.ReplaceAll(aclTopic, "%c", clientid)
+
+		if topics.Match(aclTopic, topic) {
 			return true, nil
 		}
 	}
