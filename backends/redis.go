@@ -342,6 +342,15 @@ func (o Redis) GetName() string {
 	return "Redis"
 }
 
+func (o Redis) Halt() {
+	if o.conn != nil {
+		err := o.conn.Close()
+		if err != nil {
+			log.Errorf("Redis cleanup error: %s", err)
+		}
+	}
+}
+
 
 func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
 	switch acc {
