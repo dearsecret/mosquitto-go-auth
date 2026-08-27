@@ -34,7 +34,7 @@ RUN set -ex; \
         -DLWS_WITH_ZIP_FOPS=OFF \
         -DLWS_WITH_ZLIB=OFF \
         -DLWS_WITH_EXTERNAL_POLL=ON; \
-    make -j "$(nproc)"; \
+    make CFLAGS="-Wno-error=enum-int-mismatch" -j "$(nproc)"; \
     rm -rf /root/.cmake
 
 WORKDIR /app
