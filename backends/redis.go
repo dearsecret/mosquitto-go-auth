@@ -338,6 +338,10 @@ func (o Redis) matchCommonWildcardAcl(topic string, acc int32) (bool, error) {
 	return false, nil
 }
 
+func (o Redis) GetName() string {
+	return "Redis"
+}
+
 
 func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
 	switch acc {
