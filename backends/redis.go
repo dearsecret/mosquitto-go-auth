@@ -158,7 +158,7 @@ func (o Redis) GetUser(username, password, _ string) (bool, error) {
 }
 
 func (o Redis) getUser(username, password string) (bool, error) {
-	pwHash, err := o.conn.Get(o.ctx, username).Result()
+	pwHash, err := o.conn.HGet(o.ctx, "auth", username).Result()
 	if err == goredis.Nil {
 		return false, nil
 	} else if err != nil {
@@ -199,18 +199,17 @@ func (o Redis) GetSuperuser(username string) (bool, error) {
 }
 
 func (o Redis) getSuperuser(username string) (bool, error) {
-	isSuper, err := o.conn.Get(o.ctx, fmt.Sprintf("%s:su", username)).Result()
+	_, err := o.conn.HGet(o.ctx, "admin", username).Result()
+
 	if err == goredis.Nil {
 		return false, nil
-	} else if err != nil {
+	}
+
+	if err != nil {
 		return false, err
 	}
 
-	if isSuper == "true" {
-		return true, nil
-	}
-
-	return false, nil
+	return true, nil
 }
 
 func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, error) {
@@ -370,13 +369,13 @@ func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
 func (o Redis) getCommonAclKey(acc int32) string {
 	switch acc {
 	case MOSQ_ACL_SUBSCRIBE:
-		return "common:sacls"
+		return "all:sacls"
 
 	case MOSQ_ACL_READ:
-		return "common:racls"
+		return "all:racls"
 
 	case MOSQ_ACL_WRITE:
-		return "common:wacls"
+		return "all:wacls"
 
 	default:
 		return ""
@@ -389,7 +388,7 @@ func (o Redis) matchCommonWriteAcl(
 	clientid string,
 	topic string,
 ) (bool, error) {
-	acls, err := o.conn.HKeys(o.ctx, "common:wacls").Result()
+	acls, err := o.conn.HKeys(o.ctx, "all:wacls").Result()
 	if err != nil {
 		return false, err
 	}
@@ -408,15 +407,15 @@ func (o Redis) matchCommonWriteAcl(
 
 
 func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
-	value, err := o.conn.HGet(o.ctx, topic, username).Result()
+	_, err := o.conn.HGet(o.ctx, topic, username).Result()
+
+	if err == nil {
+		return true, nil
+	}
 
 	if err == goredis.Nil {
 		return false, nil
 	}
 
-	if err != nil {
-		return false, err
-	}
-
-	return value != "", nil
+	return false, err
 }
