@@ -409,7 +409,11 @@ func (o Redis) matchCommonWriteAcl(
 }
 
 
-func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
+ffunc (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
+	if strings.HasSuffix(topic, "/+") {
+		topic = strings.TrimSuffix(topic, "/+")
+	}
+
 	_, err := o.conn.HGet(o.ctx, topic, username).Result()
 
 	if err == nil {
