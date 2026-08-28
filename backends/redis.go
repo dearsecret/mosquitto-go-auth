@@ -199,7 +199,10 @@ func (o Redis) GetSuperuser(username string) (bool, error) {
 }
 
 func (o Redis) getSuperuser(username string) (bool, error) {
-	_, err := o.conn.HGet(o.ctx, "admin", username).Result()
+	isSuper, err := o.conn.Get(
+		o.ctx,
+		fmt.Sprintf("%s:su", username),
+	).Result()
 
 	if err == goredis.Nil {
 		return false, nil
@@ -208,9 +211,9 @@ func (o Redis) getSuperuser(username string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	return true, nil
+	return isSuper == "true", nil
 }
+
 
 func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, error) {
 	ok, err := o.checkAcl(username, topic, clientid, acc)
