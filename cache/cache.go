@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	goredis "github.com/go-redis/redis/v8"
+	goredis "github.com/redis/go-redis/v9"
 	bes "github.com/iegomez/mosquitto-go-auth/backends"
 	"github.com/jellydator/ttlcache/v3"
 	log "github.com/sirupsen/logrus"
@@ -183,9 +183,10 @@ func (s *redisStore) Close() {
 }
 
 // CheckAuthRecord checks if the username/password pair is present in the cache. Return if it's present and, if so, if it was granted privileges
-func (s *goStore) CheckAuthRecord(ctx context.Context, username, password string) (bool, bool) {
-	record := toAuthRecord(username, password, s.h)
-	return s.checkRecord(ctx, record, expirationWithJitter(s.authExpiration, s.authJitter))
+func (s *redisStore) CheckAuthRecord(ctx context.Context, username, password string) (bool, bool) {
+	key := "auth:" + username
+	field := toAuthRecord(username, password, s.h)
+	return s.checkRecord(ctx, key, field, s.authExpiration)
 }
 
 // CheckAclCache checks if the username/topic/clientid/acc mix is present in the cache. Return if it's present and, if so, if it was granted privileges.
@@ -211,30 +212,17 @@ func (s *goStore) checkRecord(ctx context.Context, record string, expirationTime
 	return present, item.Value()
 }
 
-// CheckAuthRecord checks if the username/password pair is present in the cache. Return if it's present and, if so, if it was granted privileges
-func (s *redisStore) CheckAuthRecord(ctx context.Context, username, password string) (bool, bool) {
-	record := toAuthRecord(username, password, s.h)
-	return s.checkRecord(ctx, record, s.authExpiration)
-}
 
-// CheckAclCache checks if the username/topic/clientid/acc mix is present in the cache. Return if it's present and, if so, if it was granted privileges.
-func (s *redisStore) CheckACLRecord(ctx context.Context, username, topic, clientid string, acc int) (bool, bool) {
-	record := toACLRecord(username, topic, clientid, acc, s.h)
-	return s.checkRecord(ctx, record, s.aclExpiration)
-}
+func (s *redisStore) checkRecord(ctx context.Context, key, field string, expirationTime time.Duration) (bool, bool) {
 
-func (s *redisStore) checkRecord(ctx context.Context, record string, expirationTime time.Duration) (bool, bool) {
-
-	present, granted, err := s.getAndRefresh(ctx, record, expirationTime)
+	present, granted, err := s.getAndRefresh(ctx, key, field, expirationTime)
 	if err == nil {
 		return present, granted
 	}
-
 	if isMovedError(err) {
 		s.client.ReloadState(ctx)
 
-		//Retry once.
-		present, granted, err = s.getAndRefresh(ctx, record, expirationTime)
+		present, granted, err = s.getAndRefresh(ctx, key, field, expirationTime)
 	}
 
 	if err != nil {
@@ -244,24 +232,51 @@ func (s *redisStore) checkRecord(ctx context.Context, record string, expirationT
 	return present, granted
 }
 
-func (s *redisStore) getAndRefresh(ctx context.Context, record string, expirationTime time.Duration) (bool, bool, error) {
-	val, err := s.client.Get(ctx, record).Result()
+func (s *redisStore) getAndRefresh(ctx context.Context, key, field string, expirationTime time.Duration) (bool, bool, error) {
+	var (
+		value string
+		err   error
+	)
+
+	if s.refreshExpiration {
+		options := &goredis.HGetEXOptions{
+			ExpirationType: goredis.HGetEXExpirationEX,
+			ExpirationVal:  int64(expirationTime / time.Second),
+		}
+
+		values, getErr := s.client.HGetEXWithArgs(
+			ctx,
+			key,
+			options,
+			field,
+		).Result()
+
+		if getErr != nil {
+			err = getErr
+		} else if len(values) > 0 {
+			value = values[0]
+		}
+	} else {
+		value, err = s.client.HGet(
+			ctx,
+			key,
+			field,
+		).Result()
+	}
+
 	if err != nil {
+		if err == goredis.Nil {
+			return false, false, nil
+		}
+
 		return false, false, err
 	}
 
-	if s.refreshExpiration {
-		_, err = s.client.Expire(ctx, record, expirationTime).Result()
-		if err != nil {
-			return false, false, err
-		}
+	if value == "" {
+		return false, false, nil
 	}
 
-	if val == "true" {
-		return true, true, nil
-	}
-
-	return true, false, nil
+	return true, value == "true", nil
 }
 
 // SetAuthRecord sets a pair, granted option and expiration time.
@@ -294,34 +309,44 @@ func (s *goStore) SetACLRecord(ctx context.Context, username, topic, clientid st
 
 // SetAuthRecord sets a pair, granted option and expiration time.
 func (s *redisStore) SetAuthRecord(ctx context.Context, username, password string, granted string) error {
-	record := toAuthRecord(username, password, s.h)
-	return s.setRecord(ctx, record, granted, expirationWithJitter(s.authExpiration, s.authJitter))
+	key := "auth:" + username
+	field := toAuthRecord(username, password, s.h)
+	return s.setRecord(ctx, key, field, granted, expirationWithJitter(s.authExpiration, s.authJitter))
 }
 
 // SetAclCache sets a mix, granted option and expiration time.
 func (s *redisStore) SetACLRecord(ctx context.Context, username, topic, clientid string, acc int, granted string) error {
-	record := toACLRecord(username, topic, clientid, acc, s.h)
-	return s.setRecord(ctx, record, granted, expirationWithJitter(s.aclExpiration, s.aclJitter))
+	key := "acl:" + username
+	field := toACLRecord(username, topic, clientid, acc, s.h)
+	return s.setRecord(ctx, key, field, granted, expirationWithJitter(s.aclExpiration, s.aclJitter))
 }
 
-func (s *redisStore) setRecord(ctx context.Context, record, granted string, expirationTime time.Duration) error {
-	err := s.set(ctx, record, granted, expirationTime)
+func (s *redisStore) setRecord(ctx context.Context, key, field, granted string, expirationTime time.Duration) error {
+	err := s.set(ctx, key, field, granted, expirationTime)
 
 	if err == nil {
 		return nil
 	}
 
-	// If record was moved, reload and retry.
 	if isMovedError(err) {
 		s.client.ReloadState(ctx)
-
-		//Retry once.
-		err = s.set(ctx, record, granted, expirationTime)
+		err = s.set(ctx, key, field, granted, expirationTime)
 	}
 
 	return err
 }
 
-func (s *redisStore) set(ctx context.Context, record string, granted string, expirationTime time.Duration) error {
-	return s.client.Set(ctx, record, granted, expirationTime).Err()
+func (s *redisStore) set(ctx context.Context, key, field, granted string, expirationTime time.Duration) error {
+	options := &goredis.HSetEXOptions{
+		ExpirationType: goredis.HSetEXExpirationEX,
+		ExpirationVal:  int64(expirationTime / time.Second),
+	}
+
+	return s.client.HSetEXWithArgs(
+		ctx,
+		key,
+		options,
+		field,
+		granted,
+	).Err()
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	goredis "github.com/go-redis/redis/v8"
+	goredis "github.com/redis/go-redis/v9"
 	. "github.com/iegomez/mosquitto-go-auth/backends/constants"
 	"github.com/iegomez/mosquitto-go-auth/backends/topics"
 	"github.com/iegomez/mosquitto-go-auth/hashing"
@@ -18,6 +18,9 @@ type RedisClient interface {
 	Get(ctx context.Context, key string) *goredis.StringCmd
 	HGet(ctx context.Context, key, field string) *goredis.StringCmd
 	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
+	HGetEXWithArgs(ctx context.Context, key string, options *goredis.HGetEXOptions, fields ...string) *goredis.StringSliceCmd
+	HSetEXWithArgs(ctx context.Context,key string,options *goredis.HSetEXOptions,fieldsAndValues ...string,) *goredis.IntCmd
+	Publish(ctx context.Context, channel string, message interface{}) *goredis.IntCmd
 	Ping(ctx context.Context) *goredis.StatusCmd
 	Close() error
 	FlushDB(ctx context.Context) *goredis.StatusCmd
