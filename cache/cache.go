@@ -182,10 +182,28 @@ func (s *redisStore) Close() {
 	s.client.Close()
 }
 
-// CheckAuthRecord checks if the username/password pair is present in the cache. Return if it's present and, if so, if it was granted privileges
-func (s *redisStore) CheckAuthRecord(ctx context.Context, username, password string) (bool, bool) {
+// CheckAuthRecord checks if the username/password pair is present in the cache.
+func (s *goStore) CheckAuthRecord(
+	ctx context.Context,
+	username, password string,
+) (bool, bool) {
+	record := toAuthRecord(username, password, s.h)
+
+	return s.checkRecord(
+		ctx,
+		record,
+		expirationWithJitter(s.authExpiration, s.authJitter),
+	)
+}
+
+// CheckAuthRecord checks if the username/password pair is present in the cache.
+func (s *redisStore) CheckAuthRecord(
+	ctx context.Context,
+	username, password string,
+) (bool, bool) {
 	key := "auth:" + username
 	field := toAuthRecord(username, password, s.h)
+
 	return s.checkRecord(ctx, key, field, s.authExpiration)
 }
 
@@ -193,6 +211,18 @@ func (s *redisStore) CheckAuthRecord(ctx context.Context, username, password str
 func (s *goStore) CheckACLRecord(ctx context.Context, username, topic, clientid string, acc int) (bool, bool) {
 	record := toACLRecord(username, topic, clientid, acc, s.h)
 	return s.checkRecord(ctx, record, expirationWithJitter(s.aclExpiration, s.aclJitter))
+}
+
+
+func (s *redisStore) CheckACLRecord(
+	ctx context.Context,
+	username, topic, clientid string,
+	acc int,
+) (bool, bool) {
+	key := "acl:" + username
+	field := toACLRecord(username, topic, clientid, acc, s.h)
+
+	return s.checkRecord(ctx, key, field, s.aclExpiration)
 }
 
 func (s *goStore) checkRecord(ctx context.Context, record string, expirationTime time.Duration) (bool, bool) {
