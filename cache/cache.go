@@ -336,17 +336,23 @@ func (s *redisStore) setRecord(ctx context.Context, key, field, granted string, 
 	return err
 }
 
-func (s *redisStore) set(ctx context.Context, key, field, granted string, expirationTime time.Duration) error {
-	options := &goredis.HSetEXOptions{
-		ExpirationType: goredis.HSetEXExpirationEX,
-		ExpirationVal:  int64(expirationTime / time.Second),
-	}
+func (s *redisStore) set(
+    ctx context.Context,
+    key string,
+    field string,
+    granted string,
+    expirationTime time.Duration,
+) error {
+    options := &goredis.HSetEXOptions{
+        ExpirationType: goredis.HSetEXExpirationEX,
+        ExpirationVal:  int64(expirationTime / time.Second),
+    }
 
-	return s.client.HSetEXWithArgs(
-		ctx,
-		key,
-		options,
-		field,
-		granted,
-	).Err()
+    return s.client.HSetEXWithArgs(
+        ctx,
+        key,
+        options,
+        field,
+        granted,
+    ).Err()
 }
