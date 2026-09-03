@@ -188,7 +188,7 @@ func (s *goStore) CheckAuthRecord(
 	ctx context.Context,
 	username, password string,
 ) (bool, bool) {
-	record := toAuthRecord(username, password, s.h)
+	record := toAuthRecord(username, password)
 
 	return s.checkRecord(
 		ctx,
@@ -203,8 +203,7 @@ func (s *redisStore) CheckAuthRecord(
 	username, password string,
 ) (bool, bool) {
 	key := "auth:" + username
-	field := toAuthRecord(username, password, s.h)
-
+	field := toAuthRecord(username, password)
 	return s.checkRecord(ctx, key, field, s.authExpiration)
 }
 
@@ -312,9 +311,8 @@ func (s *redisStore) getAndRefresh(ctx context.Context, key, field string, expir
 
 // SetAuthRecord sets a pair, granted option and expiration time.
 func (s *goStore) SetAuthRecord(ctx context.Context, username, password string, granted string) error {
-	record := toAuthRecord(username, password, s.h)
+	record := toAuthRecord(username, password)
 	recordGranted := false
-
 	if granted == "true" {
 		recordGranted = true
 	}
@@ -341,7 +339,7 @@ func (s *goStore) SetACLRecord(ctx context.Context, username, topic, clientid st
 // SetAuthRecord sets a pair, granted option and expiration time.
 func (s *redisStore) SetAuthRecord(ctx context.Context, username, password string, granted string) error {
 	key := "auth:" + username
-	field := toAuthRecord(username, password, s.h)
+	field := toAuthRecord(username, password)
 	return s.setRecord(ctx, key, field, granted, expirationWithJitter(s.authExpiration, s.authJitter))
 }
 
