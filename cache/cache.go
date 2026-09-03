@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	b64 "encoding/base64"
 	"fmt"
 	"hash"
@@ -110,10 +111,10 @@ func NewRedisClusterStore(password string, addresses []string, authExpiration, a
 	}
 }
 
-func toAuthRecord(username, password string, h hash.Hash) string {
-	sum := h.Sum([]byte(fmt.Sprintf("auth-%s-%s", username, password)))
-	log.Debugf("to auth record: %v\n", sum)
-	return b64.StdEncoding.EncodeToString(sum)
+func toAuthRecord(username, password string) string {
+    value := fmt.Sprintf("auth-%s-%s", username, password)
+    digest := sha256.Sum256([]byte(value))
+    return b64.StdEncoding.EncodeToString(digest[:])
 }
 
 func toACLRecord(username, topic, clientid string, acc int, h hash.Hash) string {
