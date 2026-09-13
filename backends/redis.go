@@ -245,28 +245,94 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
     }
 
 	if acc == MOSQ_ACL_WRITE {
+		log.Infof(
+			"WRITE ACL start: username=%s clientid=%s topic=%s",
+			username, clientid, topic,
+		)
+
 		allowed, err := o.matchCommonWriteAcl(username, clientid, topic)
+
+		log.Infof(
+			"WRITE ACL common result: username=%s topic=%s allowed=%t err=%v",
+			username, topic, allowed, err,
+		)
+
 		if err != nil || !allowed {
+			log.Infof(
+				"WRITE ACL denied: username=%s topic=%s",
+				username, topic,
+			)
 			return allowed, err
 		}
 
+		log.Infof(
+			"WRITE ACL allowed: username=%s topic=%s",
+			username, topic,
+		)
+
 		if strings.HasPrefix(topic, "out/kick/") {
+			log.Infof(
+				"KICK topic matched: username=%s topic=%s",
+				username, topic,
+			)
+
 			isSuper, err := o.GetSuperuser(username)
+
+			log.Infof(
+				"KICK superuser result: username=%s superuser=%t err=%v",
+				username, isSuper, err,
+			)
+
 			if err != nil {
 				return false, err
 			}
+
 			if !isSuper {
+				log.Infof(
+					"KICK denied: not superuser username=%s",
+					username,
+				)
 				return false, nil
 			}
+
 			targetUsername := strings.TrimPrefix(topic, "out/kick/")
+
+			log.Infof(
+				"KICK target: username=%s target=%s",
+				username, targetUsername,
+			)
+
 			if targetUsername == "" {
+				log.Infof(
+					"KICK denied: empty target username=%s",
+					username,
+				)
 				return false, nil
 			}
+
+			log.Infof(
+				"KICK calling broker API: target=%s",
+				targetUsername,
+			)
+
 			if err := KickClientByUsername(targetUsername); err != nil {
-				log.Errorf("kick client failed: username=%s err=%v", targetUsername, err)
+				log.Errorf(
+					"KICK broker API failed: target=%s err=%v",
+					targetUsername, err,
+				)
 				return false, err
 			}
+
+			log.Infof(
+				"KICK broker API success: target=%s",
+				targetUsername,
+			)
 		}
+
+		log.Infof(
+			"WRITE ACL final allow: username=%s topic=%s",
+			username, topic,
+		)
 
 		return true, nil
 	}
