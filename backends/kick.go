@@ -2,7 +2,7 @@ package backends
 
 /*
 #include <stdlib.h>
-#include <mosquitto.h>
+#include <mosquitto_broker.h>
 
 static int kick_client_by_username(const char *username) {
 	return mosquitto_kick_client_by_username(username, false);
