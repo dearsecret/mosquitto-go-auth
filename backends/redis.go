@@ -263,6 +263,7 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 				return false, nil
 			}
 			if err := KickClientByUsername(targetUsername); err != nil {
+				log.Errorf("kick client failed: username=%s err=%v", targetUsername, err)
 				return false, err
 			}
 		}
