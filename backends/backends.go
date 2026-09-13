@@ -58,7 +58,7 @@ const (
 	defaultUserAgent = "mosquitto"
 )
 
-// AllowedBackendsOptsPrefix serves as a check for allowed backends and a map from backend to expected opts prefix.
+// AllowedBackendsOptsPrefix serves as a  for allowed backends and a map from backend to expected opts prefix.
 var allowedBackendsOptsPrefix = map[string]string{
 	postgresBackend: "pg",
 	jwtBackend:      "jwt",
