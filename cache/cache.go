@@ -46,6 +46,7 @@ type Store interface {
 	SetAuthRecord(ctx context.Context, username, password, granted string) error
 	CheckAuthRecord(ctx context.Context, username, password string) (bool, bool)
 	SetACLRecord(ctx context.Context, username, topic, clientid string, acc int, granted string) error
+	DeleteAuthRecord(ctx context.Context,username string,) error
 	CheckACLRecord(ctx context.Context, username, topic, clientid string, acc int) (bool, bool)
 	Connect(ctx context.Context, reset bool) bool
 	Close()
@@ -383,5 +384,16 @@ func (s *redisStore) set(
         options,
         field,
         granted,
+    ).Err()
+}
+
+
+func (s *redisStore) DeleteAuthRecord(
+    ctx context.Context,
+    username string,
+) error {
+    return s.client.Del(
+        ctx,
+        "auth:"+username,
     ).Err()
 }

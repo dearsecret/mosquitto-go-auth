@@ -20,6 +20,7 @@ type RedisClient interface {
 	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
 	HGetEXWithArgs(ctx context.Context, key string, options *goredis.HGetEXOptions, fields ...string) *goredis.StringSliceCmd
 	HSetEXWithArgs(ctx context.Context,key string,options *goredis.HSetEXOptions,fieldsAndValues ...string,) *goredis.IntCmd
+	Del(ctx context.Context, keys ...string) *goredis.IntCmd
 	Publish(ctx context.Context, channel string, message interface{}) *goredis.IntCmd
 	Ping(ctx context.Context) *goredis.StatusCmd
 	Close() error

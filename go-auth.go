@@ -406,6 +406,19 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 		}
 	}
 
+	if isKickCommand && aclCheck && err == nil && authPlugin.useCache {
+		targetUsername := strings.TrimPrefix(topic, "out/")
+		if targetUsername != "" {
+			if err := authPlugin.cache.DeleteAuthRecord(
+				authPlugin.ctx,
+				targetUsername,
+			); err != nil {
+				log.Errorf("delete auth cache failed: %s", err)
+				return false, err
+			}
+		}
+	}
+
 	log.Debugf("Acl is %t for user %s", aclCheck, username)
 	return aclCheck, err
 }
