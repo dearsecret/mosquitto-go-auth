@@ -245,7 +245,29 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
     }
 
 	if acc == MOSQ_ACL_WRITE {
-		return o.matchCommonWriteAcl(username, clientid, topic)
+		allowed, err := o.matchCommonWriteAcl(username, clientid, topic)
+		if err != nil || !allowed {
+			return allowed, err
+		}
+
+		if strings.HasPrefix(topic, "out/kick/") {
+			isSuper, err := o.GetSuperuser(username)
+			if err != nil {
+				return false, err
+			}
+			if !isSuper {
+				return false, nil
+			}
+			targetUsername := strings.TrimPrefix(topic, "out/kick/")
+			if targetUsername == "" {
+				return false, nil
+			}
+			if err := KickClientByUsername(targetUsername); err != nil {
+				return false, err
+			}
+		}
+
+		return true, nil
 	}
 
 	if strings.HasPrefix(topic, "ch/") {
