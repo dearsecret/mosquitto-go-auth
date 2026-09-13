@@ -397,3 +397,11 @@ func (s *redisStore) DeleteAuthRecord(
         "auth:"+username,
     ).Err()
 }
+
+
+func (s *goStore) DeleteAuthRecord(
+	ctx context.Context,
+	username string,
+) error {
+	return nil
+}
