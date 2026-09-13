@@ -545,7 +545,7 @@ func (b *Backends) checkSuperuserThenACL(username, topic, clientid string, acc i
 					backend.GetName(),
 				)
 
-				if strings.HasPrefix(topic, "out/") {
+				if acc == constants.MOSQ_ACL_WRITE && strings.HasPrefix(topic, "out/") {
 					targetUsername := strings.TrimPrefix(topic, "out/")
 					if targetUsername == "" {
 						return false, nil
