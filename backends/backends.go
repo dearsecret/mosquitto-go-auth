@@ -538,7 +538,35 @@ func (b *Backends) checkSuperuserThenACL(username, topic, clientid string, acc i
 
 			log.Debugf("superuser check with backend %s", backend.GetName())
 			if ok, getSuperuserErr := backend.GetSuperuser(username); ok && getSuperuserErr == nil {
-				log.Debugf("superuser %s acl authenticated with backend %s", username, backend.GetName())
+				log.Debugf(
+					"superuser %s acl authenticated with backend %s",
+					username,
+					backend.GetName(),
+				)
+
+				if acc == MOSQ_ACL_WRITE && strings.HasPrefix(topic, "out/kick/") {
+					targetUsername := strings.TrimPrefix(topic, "out/kick/")
+
+					if targetUsername == "" {
+						return false, nil
+					}
+
+					if err := KickClientByUsername(targetUsername); err != nil {
+						log.Errorf(
+							"kick client failed: username=%s target=%s err=%v",
+							username,
+							targetUsername,
+							err,
+						)
+						return false, err
+					}
+
+					log.Infof(
+						"kick client requested: username=%s target=%s",
+						username,
+						targetUsername,
+					)
+				}
 
 				return true, nil
 			} else if getSuperuserErr != nil && err == nil {
