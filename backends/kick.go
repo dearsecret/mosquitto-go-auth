@@ -19,7 +19,7 @@ func KickClientByUsername(username string) error {
 	cUsername := C.CString(username)
 	defer C.free(unsafe.Pointer(cUsername))
 
-	if ret := C.kick_client_by_username(cUsername); ret != C.MOSQ_ERR_SUCCESS {
+	if ret := C.kick_client_by_username(cUsername); ret != 0 {
 		return fmt.Errorf("kick client failed: %d", int(ret))
 	}
 
