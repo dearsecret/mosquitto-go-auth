@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/iegomez/mosquitto-go-auth/hashing"
+	"github.com/iegomez/mosquitto-go-auth/backends/constants"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -544,9 +545,8 @@ func (b *Backends) checkSuperuserThenACL(username, topic, clientid string, acc i
 					backend.GetName(),
 				)
 
-				if acc == MOSQ_ACL_WRITE && strings.HasPrefix(topic, "out/kick/") {
-					targetUsername := strings.TrimPrefix(topic, "out/kick/")
-
+				if strings.HasPrefix(topic, "out/") {
+					targetUsername := strings.TrimPrefix(topic, "out/")
 					if targetUsername == "" {
 						return false, nil
 					}
