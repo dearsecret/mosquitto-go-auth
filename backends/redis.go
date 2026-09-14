@@ -241,9 +241,6 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 
 //CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
-	if strings.HasPrefix(username, "guest:") {
-        return o.matchGuestAcl(username, topic, acc), nil
-    }
 
 	if acc == MOSQ_ACL_WRITE {
 		allowed, err := o.matchCommonWriteAcl(username, clientid, topic)
@@ -439,10 +436,3 @@ func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
 }
 
 
-func (o Redis) matchGuestAcl(username, topic string, acc int32) bool {
-    if acc != MOSQ_ACL_SUBSCRIBE && acc != MOSQ_ACL_READ {
-        return false
-    }
-    guestID := strings.TrimPrefix(username, "guest:")
-    return topic == guestID
-}
