@@ -330,6 +330,13 @@ func AuthUnpwdCheck(username, password, clientid, clientip *C.char) uint8 {
 	if ok {
 		return AuthGranted
 	}
+	log.Debugf(
+		"MQTT authentication rejected: username=%s clientid=%s clientip=%s",
+		C.GoString(username),
+		C.GoString(clientid),
+		C.GoString(clientip),
+	)
+
 
 	return AuthRejected
 }
