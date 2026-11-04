@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/iegomez/mosquitto-go-auth/hashing"
-	"github.com/iegomez/mosquitto-go-auth/backends/constants"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 )
@@ -544,29 +543,6 @@ func (b *Backends) checkSuperuserThenACL(username, topic, clientid string, acc i
 					username,
 					backend.GetName(),
 				)
-
-				if acc == constants.MOSQ_ACL_WRITE && strings.HasPrefix(topic, "out/") {
-					targetUsername := strings.TrimPrefix(topic, "out/")
-					if targetUsername == "" {
-						return false, nil
-					}
-
-					if err := KickClientByUsername(targetUsername); err != nil {
-						log.Errorf(
-							"kick client failed: username=%s target=%s err=%v",
-							username,
-							targetUsername,
-							err,
-						)
-						return false, err
-					}
-
-					log.Infof(
-						"kick client requested: username=%s target=%s",
-						username,
-						targetUsername,
-					)
-				}
 
 				return true, nil
 			} else if getSuperuserErr != nil && err == nil {

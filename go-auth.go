@@ -394,9 +394,7 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
-	isKickCommand := strings.HasPrefix(topic, "out/")
-
-	if authPlugin.useCache && !isKickCommand {
+	if authPlugin.useCache {
 		log.Debugf("checking acl cache for %s", username)
 		cached, granted = authPlugin.cache.CheckACLRecord(
 			authPlugin.ctx, username, topic, clientid, acc,
@@ -409,7 +407,7 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	aclCheck, err = authPlugin.backends.AuthAclCheck(clientid, username, topic, acc)
 
-	if authPlugin.useCache && !isKickCommand && err == nil {
+	if authPlugin.useCache && err == nil {
 		authGranted := "false"
 		if aclCheck {
 			authGranted = "true"
@@ -425,19 +423,6 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 		); setACLErr != nil {
 			log.Errorf("set acl cache: %s", setACLErr)
 			return false, setACLErr
-		}
-	}
-
-	if isKickCommand && aclCheck && err == nil && authPlugin.useCache {
-		targetUsername := strings.TrimPrefix(topic, "out/")
-		if targetUsername != "" {
-			if err := authPlugin.cache.DeleteAuthRecord(
-				authPlugin.ctx,
-				targetUsername,
-			); err != nil {
-				log.Errorf("delete auth cache failed: %s", err)
-				return false, err
-			}
 		}
 	}
 
