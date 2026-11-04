@@ -52,7 +52,7 @@ func TestBackendsOrder(t *testing.T) {
 		b, err := Initialize(authOpts, log.DebugLevel, version)
 		So(err, ShouldBeNil)
 
-		tt1, err1 := b.AuthUnpwdCheck(username, password, clientid)
+		tt1, err1 := b.AuthUnpwdCheck(username, password, clientid, "")
 
 		So(err1, ShouldBeNil)
 		So(tt1, ShouldBeTrue)

@@ -370,9 +370,12 @@ func checkRegistered(bename string, checkers []string) bool {
 
 	return false
 }
-
 // AuthUnpwdCheck checks user authentication.
 func (b *Backends) AuthUnpwdCheck(username, password, clientid string) (bool, error) {
+	return b.AuthUnpwdCheckWithIP(username, password, clientid, "")
+}
+
+func (b *Backends) AuthUnpwdCheckWithIP(username, password, clientid, clientip string) (bool, error) {
 	var authenticated bool
 	var err error
 

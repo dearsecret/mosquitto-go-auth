@@ -306,12 +306,17 @@ func setCache(authOpts map[string]string) {
 }
 
 //export AuthUnpwdCheck
-func AuthUnpwdCheck(username, password, clientid *C.char) uint8 {
+func AuthUnpwdCheck(username, password, clientid, clientip *C.char) uint8 {
 	var ok bool
 	var err error
 
 	for try := 0; try <= authPlugin.retryCount; try++ {
-		ok, err = authUnpwdCheck(C.GoString(username), C.GoString(password), C.GoString(clientid))
+		ok, err = authUnpwdCheck(
+			C.GoString(username),
+			C.GoString(password),
+			C.GoString(clientid),
+			C.GoString(clientip),
+		)
 		if err == nil {
 			break
 		}
@@ -329,7 +334,7 @@ func AuthUnpwdCheck(username, password, clientid *C.char) uint8 {
 	return AuthRejected
 }
 
-func authUnpwdCheck(username, password, clientid string) (bool, error) {
+func authUnpwdCheck(username, password, clientid, clientip string) (bool, error) {
 	var authenticated bool
 	var cached bool
 	var granted bool
@@ -346,7 +351,7 @@ func authUnpwdCheck(username, password, clientid string) (bool, error) {
 		}
 	}
 
-	authenticated, err = authPlugin.backends.AuthUnpwdCheck(username, password, clientid)
+	authenticated, err = authPlugin.backends.AuthUnpwdCheckWithIP(username, password, clientid, clientip)
 
 	if authPlugin.useCache && err == nil {
 		authGranted := "false"
