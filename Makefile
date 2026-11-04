@@ -9,13 +9,13 @@ endif
 
 all:
 	@echo "Bulding for $(UNAME_S)"
-	env CGO_CFLAGS="$(CFLAGS)" go build -buildmode=c-archive go-auth.go
+	env CGO_CFLAGS="$(CFLAGS)" go build -buildmode=c-archive -o go-auth.a go-auth.go commands.go
 	env CGO_LDFLAGS="$(LDFLAGS)" go build -buildmode=c-shared -o go-auth.so
 	go build pw-gen/pw.go
 
 without-vcs:
 	@echo "Bulding for $(UNAME_S)"
-	env CGO_CFLAGS="$(CFLAGS)" go build -buildvcs=false -buildmode=c-archive go-auth.go
+	env CGO_CFLAGS="$(CFLAGS)" go build -buildvcs=false -buildmode=c-archive -o go-auth.a go-auth.go commands.go
 	env CGO_LDFLAGS="$(LDFLAGS)" go build -buildvcs=false -buildmode=c-shared -o go-auth.so
 	go build -buildvcs=false pw-gen/pw.go
 

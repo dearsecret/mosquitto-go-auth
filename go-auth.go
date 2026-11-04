@@ -26,6 +26,7 @@ type AuthPlugin struct {
 	hasher                hashing.HashComparer
 	retryCount            int
 	useClientidAsUsername bool
+	streamConsumer        *RedisStreamConsumer
 }
 
 // errors to signal mosquitto
@@ -37,6 +38,16 @@ const (
 
 var authOpts map[string]string //Options passed by mosquitto.
 var authPlugin AuthPlugin      //General struct with options and conf.
+
+func isRedisBackendEnabled(opts map[string]string) bool {
+	for _, backend := range strings.Split(opts["backends"], ",") {
+		if strings.TrimSpace(backend) == "redis" {
+			return true
+		}
+	}
+
+	return false
+}
 
 //export AuthPluginInit
 func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *C.char) {
@@ -127,6 +138,17 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 
 	if authPlugin.useCache {
 		setCache(authOpts)
+	}
+
+	if isRedisBackendEnabled(authOpts) {
+		consumer, err := NewRedisStreamConsumer(authOpts)
+		if err != nil {
+			log.Errorf("failed to initialize redis command consumer: %v", err)
+		} else {
+			authPlugin.streamConsumer = consumer
+			authPlugin.streamConsumer.Start()
+			log.Info("Redis command consumer started")
+		}
 	}
 }
 
@@ -431,7 +453,11 @@ func AuthPskKeyGet() bool {
 //export AuthPluginCleanup
 func AuthPluginCleanup() {
 	log.Info("Cleaning up plugin")
-	//If cache is set, close cache connection.
+
+	if authPlugin.streamConsumer != nil {
+		authPlugin.streamConsumer.Stop()
+	}
+
 	if authPlugin.cache != nil {
 		authPlugin.cache.Close()
 	}
