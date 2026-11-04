@@ -3,7 +3,10 @@ package main
 import "C"
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +30,7 @@ type AuthPlugin struct {
 	retryCount            int
 	useClientidAsUsername bool
 	streamConsumer        *RedisStreamConsumer
+	authFailedURL         string
 }
 
 // errors to signal mosquitto
@@ -65,6 +69,8 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 	for i := 0; i < authOptsNum; i++ {
 		authOpts[C.GoString(keys[i])] = C.GoString(values[i])
 	}
+
+	authPlugin.authFailedURL = strings.TrimSpace(authOpts["auth_failed_url"])
 
 	if retryCount, ok := authOpts["retry_count"]; ok {
 		retry, err := strconv.ParseInt(retryCount, 10, 64)
@@ -330,13 +336,18 @@ func AuthUnpwdCheck(username, password, clientid, clientip *C.char) uint8 {
 	if ok {
 		return AuthGranted
 	}
+
+	if authPlugin.authFailedURL != "" {
+		go sendAuthFailed(
+			authPlugin.authFailedURL, C.GoString(username), C.GoString(clientid), C.GoString(clientip),
+		)
+	}
 	log.Debugf(
 		"MQTT authentication rejected: username=%s clientid=%s clientip=%s",
 		C.GoString(username),
 		C.GoString(clientid),
 		C.GoString(clientip),
 	)
-
 
 	return AuthRejected
 }
@@ -471,3 +482,50 @@ func setUsername(username, clientid string) string {
 }
 
 func main() {}
+
+type AuthFailedPayload struct {
+	Username string `json:"username"`
+	ClientID string `json:"clientid"`
+	ClientIP string `json:"clientip"`
+}
+
+var authFailedHTTPClient = &http.Client{
+	Timeout: 2 * time.Second,
+}
+
+func sendAuthFailed(url, username, clientid, clientip string) {
+	payload := AuthFailedPayload{
+		Username: username,
+		ClientID: clientid,
+		ClientIP: clientip,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Errorf("failed to marshal auth failure event: %v", err)
+		return
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPost,
+		url,
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		log.Errorf("failed to create auth failure request: %v", err)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := authFailedHTTPClient.Do(req)
+	if err != nil {
+		log.Errorf("failed to send auth failure event: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Errorf("auth failure event returned HTTP status: %d", resp.StatusCode)
+	}
+}
