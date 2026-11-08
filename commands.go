@@ -303,47 +303,130 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 		strings.TrimSpace(streamString(message.Values["command"])),
 	)
 
-	if command != "kick" {
-		log.Errorf(
-			"unsupported redis stream command: id=%s command=%q",
-			message.ID,
-			command,
+	switch command {
+	case "kick":
+		username := strings.TrimSpace(
+			streamString(message.Values["username"]),
 		)
-		return
-	}
 
-	username := strings.TrimSpace(
-		streamString(message.Values["username"]),
-	)
+		if username == "" {
+			log.Errorf("redis stream kick missing username: id=%s", message.ID)
+			return
+		}
 
-	if username == "" {
-		log.Errorf("redis stream kick missing username: id=%s", message.ID)
-		return
-	}
-
-	if err := bes.KickClientByUsername(username); err != nil {
-		log.Errorf(
-			"redis stream kick failed: id=%s username=%s err=%v",
-			message.ID,
-			username,
-			err,
-		)
-		return
-	}
-
-	if authPlugin.useCache && authPlugin.cache != nil {
-		if err := authPlugin.cache.DeleteAuthRecord(
-			authPlugin.ctx,
-			username,
-		); err != nil {
+		if err := bes.KickClientByUsername(username); err != nil {
 			log.Errorf(
-				"redis stream auth cache invalidation failed: id=%s username=%s err=%v",
+				"redis stream kick failed: id=%s username=%s err=%v",
 				message.ID,
 				username,
 				err,
 			)
 			return
 		}
+
+		if authPlugin.useCache && authPlugin.cache != nil {
+			if err := authPlugin.cache.DeleteAuthRecord(
+				authPlugin.ctx,
+				username,
+			); err != nil {
+				log.Errorf(
+					"redis stream auth cache invalidation failed: id=%s username=%s err=%v",
+					message.ID,
+					username,
+					err,
+				)
+				return
+			}
+		}
+
+		log.Infof(
+			"redis stream command processed: id=%s command=kick username=%s",
+			message.ID,
+			username,
+		)
+
+	case "dispatch":
+		topic := strings.TrimSpace(
+			streamString(message.Values["topic"]),
+		)
+
+		if topic == "" {
+			log.Errorf("redis stream dispatch missing topic: id=%s", message.ID)
+			return
+		}
+
+		payload := []byte(streamString(message.Values["payload"]))
+
+		qos := 0
+		if value := streamString(message.Values["qos"]); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 0 || parsed > 2 {
+				log.Errorf(
+					"redis stream dispatch invalid qos: id=%s qos=%q",
+					message.ID,
+					value,
+				)
+				return
+			}
+			qos = parsed
+		}
+
+		retain := false
+		if value := streamString(message.Values["retain"]); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				log.Errorf(
+					"redis stream dispatch invalid retain: id=%s retain=%q",
+					message.ID,
+					value,
+				)
+				return
+			}
+			retain = parsed
+		}
+
+		expiry := uint32(0)
+
+		if value := streamString(message.Values["expiry_seconds"]); value != "" {
+			parsed, err := strconv.ParseUint(value, 10, 32)
+			if err != nil {
+				log.Errorf(
+					"redis stream dispatch invalid expiry: id=%s expiry=%q",
+					message.ID,
+					value,
+				)
+				return
+			}
+
+			expiry = uint32(parsed)
+		}
+
+		if err := bes.Dispatch(topic, payload, qos, retain, expiry); err != nil {
+			log.Errorf(
+				"redis stream dispatch failed: id=%s topic=%s err=%v",
+				message.ID,
+				topic,
+				err,
+			)
+			return
+		}
+
+		log.Infof(
+			"redis stream command processed: id=%s command=dispatch topic=%s qos=%d retain=%t expiry=%ds",
+			message.ID,
+			topic,
+			qos,
+			retain,
+			expiry,
+		)
+
+	default:
+		log.Errorf(
+			"unsupported redis stream command: id=%s command=%q",
+			message.ID,
+			command,
+		)
+		return
 	}
 
 	if err := c.client.XAck(
@@ -359,10 +442,4 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 		)
 		return
 	}
-
-	log.Infof(
-		"redis stream command processed: id=%s command=kick username=%s",
-		message.ID,
-		username,
-	)
 }
