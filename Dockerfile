@@ -66,7 +66,8 @@ RUN set -ex; \
     make \
         CFLAGS="-Wall -O2 -I/build/lws/include" \
         LDFLAGS="-L/build/lws/lib" \
-        WITH_WEBSOCKETS=yes; \
+        WITH_WEBSOCKETS=yes \
+        VERBOSE=1; \
     make install
 
 # Use golang:latest as a builder for the Mosquitto Go Auth plugin.
