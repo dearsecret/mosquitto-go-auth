@@ -335,7 +335,7 @@ func AuthUnpwdCheck(username, password, clientid, clientip *C.char) uint8 {
 
 	if ok {
 		return AuthGranted
-	}}
+	}
 
 	if authPlugin.authFailedURL != "" {
 		go sendAuthFailed(
