@@ -20,7 +20,6 @@ import (
 type RedisStreamConsumer struct {
 	client        redis.UniversalClient
 	stream        string
-	eventStream   string
 	group         string
 	consumer      string
 	block         time.Duration
@@ -144,7 +143,6 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 	return &RedisStreamConsumer{
 		client:        client,
 		stream:        stream,
-		eventStream:   strings.TrimSpace(opts["redis_event_stream"]),
 		group:         group,
 		consumer:      consumer,
 		block:         block,
@@ -608,31 +606,3 @@ func (c *RedisStreamConsumer) sendFallback(
 	}
 }
 
-func (c *RedisStreamConsumer) PublishConnectEvent(
-	username string,
-	clientID string,
-) error {
-	if c == nil || c.client == nil {
-		return fmt.Errorf("redis stream consumer is not initialized")
-	}
-
-	if c.eventStream == "" {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		3*time.Second,
-	)
-	defer cancel()
-
-	return c.client.XAdd(ctx, &redis.XAddArgs{
-		Stream: c.eventStream,
-		Values: map[string]interface{}{
-			"event":     "connect",
-			"username":  username,
-			"client_id": clientID,
-			"timestamp": time.Now().UnixMilli(),
-		},
-	}).Err()
-}
