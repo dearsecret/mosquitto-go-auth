@@ -49,7 +49,12 @@ WORKDIR /app
 
 RUN mkdir -p mosquitto/auth mosquitto/conf.d
 
-RUN wget http://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz
+RUN wget \
+    --tries=5 \
+    --waitretry=3 \
+    --retry-connrefused \
+    https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz \
+    -O mosquitto-${MOSQUITTO_VERSION}.tar.gz
 
 RUN tar xzvf mosquitto-${MOSQUITTO_VERSION}.tar.gz
 
