@@ -145,6 +145,7 @@ RUN set -ex; \
     apt update; \
     apt install -y \
         libc-ares2 \
+        libmicrohttpd12 \
         openssl \
         uuid \
         tini \
