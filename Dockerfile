@@ -113,6 +113,7 @@ COPY ./ ./
 RUN set -ex; \
     go build -buildmode=c-archive -o go-auth.a go-auth.go commands.go; \
     go build -buildmode=c-shared -o go-auth.so; \
+    go build -buildmode=c-shared -o disconnect.so ./disconnect-plugin; \
     go build pw-gen/pw.go
 
 # Start from a new image.
@@ -146,6 +147,7 @@ COPY --from=mosquitto_builder /app/mosquitto/ /mosquitto/
 
 COPY --from=go_auth_builder /app/pw /mosquitto/pw
 COPY --from=go_auth_builder /app/go-auth.so /mosquitto/go-auth.so
+COPY --from=go_auth_builder /app/disconnect.so /mosquitto/disconnect.so
 
 COPY --from=mosquitto_builder \
     /usr/local/sbin/mosquitto \
