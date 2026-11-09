@@ -334,6 +334,15 @@ func AuthUnpwdCheck(username, password, clientid, clientip *C.char) uint8 {
 	}
 
 	if ok {
+		if authPlugin.streamConsumer != nil {
+			if err := authPlugin.streamConsumer.PublishConnectEvent(
+				setUsername(C.GoString(username), C.GoString(clientid)),
+				C.GoString(clientid),
+			); err != nil {
+				log.Errorf("failed to publish connect event: %v", err)
+			}
+		}
+
 		return AuthGranted
 	}
 

@@ -20,6 +20,7 @@ import (
 type RedisStreamConsumer struct {
 	client        redis.UniversalClient
 	stream        string
+	eventStream   string
 	group         string
 	consumer      string
 	block         time.Duration
@@ -27,11 +28,11 @@ type RedisStreamConsumer struct {
 	claimIdle     time.Duration
 	claimInterval time.Duration
 	fallbackURL   string
-	maxRetries 	  int64
-	ctx        	  context.Context
-	cancel     	  context.CancelFunc
-	wg         	  sync.WaitGroup
-	fallbackWG 	  sync.WaitGroup
+	maxRetries    int64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
+	fallbackWG    sync.WaitGroup
 }
 
 type FallbackPayload struct {
@@ -143,6 +144,7 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 	return &RedisStreamConsumer{
 		client:        client,
 		stream:        stream,
+		eventStream:   strings.TrimSpace(opts["redis_event_stream"]),
 		group:         group,
 		consumer:      consumer,
 		block:         block,
@@ -319,114 +321,110 @@ func streamString(value interface{}) string {
 }
 
 func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
-    success, err := c.processCommand(message)
+	success, err := c.processCommand(message)
 
-    if success {
+	if success {
 		_ = c.ackMessage(message.ID)
-        return
-    }
+		return
+	}
 
-    retryCount, _ := strconv.ParseInt(
-        streamString(message.Values["retry_count"]),
-        10,
-        64,
-    )
+	retryCount, _ := strconv.ParseInt(
+		streamString(message.Values["retry_count"]),
+		10,
+		64,
+	)
 
-    if retryCount < c.maxRetries {
-        if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
+	if retryCount < c.maxRetries {
+		if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
 			log.Errorf(
 				"redis stream retry handoff failed: id=%s err=%v",
 				message.ID,
 				retryErr,
 			)
 		}
-        return
-    }
+		return
+	}
 
-    log.Errorf(
-        "redis stream max retries exceeded: id=%s retries=%d err=%v",
-        message.ID,
-        retryCount,
-        err,
-    )
+	log.Errorf(
+		"redis stream max retries exceeded: id=%s retries=%d err=%v",
+		message.ID,
+		retryCount,
+		err,
+	)
 
-    if err != nil && c.fallbackURL != "" {
-        c.fallbackWG.Add(1)
+	if err != nil && c.fallbackURL != "" {
+		c.fallbackWG.Add(1)
 
-        go func() {
-            defer c.fallbackWG.Done()
-            c.sendFallback(message, err)
-        }()
-    }
+		go func() {
+			defer c.fallbackWG.Done()
+			c.sendFallback(message, err)
+		}()
+	}
 
-    c.ackMessage(message.ID)
+	c.ackMessage(message.ID)
 }
-
 
 func (c *RedisStreamConsumer) ackMessage(messageID string) error {
-    if err := c.client.XAck(
-        c.ctx,
-        c.stream,
-        c.group,
-        messageID,
-    ).Err(); err != nil {
-        log.Errorf("redis stream ack failed: id=%s err=%v", messageID, err)
-        return err
-    }
-    return nil
+	if err := c.client.XAck(
+		c.ctx,
+		c.stream,
+		c.group,
+		messageID,
+	).Err(); err != nil {
+		log.Errorf("redis stream ack failed: id=%s err=%v", messageID, err)
+		return err
+	}
+	return nil
 }
-
 
 func (c *RedisStreamConsumer) retryMessage(
-    message redis.XMessage,
-    retryCount int64,
+	message redis.XMessage,
+	retryCount int64,
 ) error {
-    values := make(map[string]interface{}, len(message.Values)+2)
+	values := make(map[string]interface{}, len(message.Values)+2)
 
-    for key, value := range message.Values {
-        values[key] = value
-    }
+	for key, value := range message.Values {
+		values[key] = value
+	}
 
-    values["retry_count"] = retryCount
-    values["original_id"] = streamString(
-        message.Values["original_id"],
-    )
+	values["retry_count"] = retryCount
+	values["original_id"] = streamString(
+		message.Values["original_id"],
+	)
 
-    if values["original_id"] == "" {
-        values["original_id"] = message.ID
-    }
+	if values["original_id"] == "" {
+		values["original_id"] = message.ID
+	}
 
-    newID, err := c.client.XAdd(
-        c.ctx,
-        &redis.XAddArgs{
-            Stream: c.stream,
-            Values: values,
-        },
-    ).Result()
+	newID, err := c.client.XAdd(
+		c.ctx,
+		&redis.XAddArgs{
+			Stream: c.stream,
+			Values: values,
+		},
+	).Result()
 
-    if err != nil {
-        return fmt.Errorf("retry XADD failed: %w", err)
-    }
+	if err != nil {
+		return fmt.Errorf("retry XADD failed: %w", err)
+	}
 
-    log.Warnf(
-        "redis stream retry scheduled: original_id=%s new_id=%s retry=%d/%d",
-        values["original_id"],
-        newID,
-        retryCount,
-        c.maxRetries,
-    )
+	log.Warnf(
+		"redis stream retry scheduled: original_id=%s new_id=%s retry=%d/%d",
+		values["original_id"],
+		newID,
+		retryCount,
+		c.maxRetries,
+	)
 
-    if err := c.ackMessage(message.ID); err != nil {
-        return fmt.Errorf(
-            "retry message created but original ACK failed: %w",
-            err,
-        )
-    }
+	if err := c.ackMessage(message.ID); err != nil {
+		return fmt.Errorf(
+			"retry message created but original ACK failed: %w",
+			err,
+		)
+	}
 
-    return nil
+	return nil
 }
-
-
 
 func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, error) {
 	command := strings.ToLower(
@@ -608,4 +606,33 @@ func (c *RedisStreamConsumer) sendFallback(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Errorf("fallback returned status: %s", resp.Status)
 	}
+}
+
+func (c *RedisStreamConsumer) PublishConnectEvent(
+	username string,
+	clientID string,
+) error {
+	if c == nil || c.client == nil {
+		return fmt.Errorf("redis stream consumer is not initialized")
+	}
+
+	if c.eventStream == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		3*time.Second,
+	)
+	defer cancel()
+
+	return c.client.XAdd(ctx, &redis.XAddArgs{
+		Stream: c.eventStream,
+		Values: map[string]interface{}{
+			"event":     "connect",
+			"username":  username,
+			"client_id": clientID,
+			"timestamp": time.Now().UnixMilli(),
+		},
+	}).Err()
 }
