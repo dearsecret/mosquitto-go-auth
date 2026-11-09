@@ -27,11 +27,11 @@ type RedisStreamConsumer struct {
 	claimIdle     time.Duration
 	claimInterval time.Duration
 	fallbackURL   string
-
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	fallbackWG sync.WaitGroup
+	maxRetries 	  int64
+	ctx        	  context.Context
+	cancel     	  context.CancelFunc
+	wg         	  sync.WaitGroup
+	fallbackWG 	  sync.WaitGroup
 }
 
 type FallbackPayload struct {
@@ -152,6 +152,7 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 		fallbackURL:   strings.TrimSpace(opts["fallback_url"]),
 		ctx:           ctx,
 		cancel:        cancel,
+		maxRetries:    streamIntOption(opts, "redis_stream_max_retries", 3),
 	}, nil
 }
 
@@ -318,34 +319,114 @@ func streamString(value interface{}) string {
 }
 
 func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
-	success, err := c.processCommand(message)
+    success, err := c.processCommand(message)
 
-	if err != nil && c.fallbackURL != "" {
-		c.fallbackWG.Add(1)
+    if success {
+		_ = c.ackMessage(message.ID)
+        return
+    }
 
-		go func() {
-			defer c.fallbackWG.Done()
-			c.sendFallback(message, err)
-		}()
-	}
+    retryCount, _ := strconv.ParseInt(
+        streamString(message.Values["retry_count"]),
+        10,
+        64,
+    )
 
-	if !success {
-		return
-	}
+    if retryCount < c.maxRetries {
+        if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
+			log.Errorf(
+				"redis stream retry handoff failed: id=%s err=%v",
+				message.ID,
+				retryErr,
+			)
+		}
+        return
+    }
 
-	if err := c.client.XAck(
-		c.ctx,
-		c.stream,
-		c.group,
-		message.ID,
-	).Err(); err != nil {
-		log.Errorf(
-			"redis stream ack failed: id=%s err=%v",
-			message.ID,
-			err,
-		)
-	}
+    log.Errorf(
+        "redis stream max retries exceeded: id=%s retries=%d err=%v",
+        message.ID,
+        retryCount,
+        err,
+    )
+
+    if err != nil && c.fallbackURL != "" {
+        c.fallbackWG.Add(1)
+
+        go func() {
+            defer c.fallbackWG.Done()
+            c.sendFallback(message, err)
+        }()
+    }
+
+    c.ackMessage(message.ID)
 }
+
+
+func (c *RedisStreamConsumer) ackMessage(messageID string) error {
+    if err := c.client.XAck(
+        c.ctx,
+        c.stream,
+        c.group,
+        messageID,
+    ).Err(); err != nil {
+        log.Errorf("redis stream ack failed: id=%s err=%v", messageID, err)
+        return err
+    }
+    return nil
+}
+
+
+func (c *RedisStreamConsumer) retryMessage(
+    message redis.XMessage,
+    retryCount int64,
+) error {
+    values := make(map[string]interface{}, len(message.Values)+2)
+
+    for key, value := range message.Values {
+        values[key] = value
+    }
+
+    values["retry_count"] = retryCount
+    values["original_id"] = streamString(
+        message.Values["original_id"],
+    )
+
+    if values["original_id"] == "" {
+        values["original_id"] = message.ID
+    }
+
+    newID, err := c.client.XAdd(
+        c.ctx,
+        &redis.XAddArgs{
+            Stream: c.stream,
+            Values: values,
+        },
+    ).Result()
+
+    if err != nil {
+        return fmt.Errorf("retry XADD failed: %w", err)
+    }
+
+    log.Warnf(
+        "redis stream retry scheduled: original_id=%s new_id=%s retry=%d/%d",
+        values["original_id"],
+        newID,
+        retryCount,
+        c.maxRetries,
+    )
+
+    if err := c.ackMessage(message.ID); err != nil {
+        return fmt.Errorf(
+            "retry message created but original ACK failed: %w",
+            err,
+        )
+    }
+
+    return nil
+}
+
+
 
 func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, error) {
 	command := strings.ToLower(
@@ -366,6 +447,15 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 			return true, nil
 		}
 
+		if authPlugin.useCache && authPlugin.cache != nil {
+			if err := authPlugin.cache.DeleteAuthRecord(
+				authPlugin.ctx,
+				username,
+			); err != nil {
+				return false, err
+			}
+		}
+
 		if err := bes.KickClientByUsername(username); err != nil {
 			log.Errorf(
 				"redis stream kick failed: id=%s username=%s err=%v",
@@ -375,27 +465,6 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 			)
 			return false, err
 		}
-
-		if authPlugin.useCache && authPlugin.cache != nil {
-			if err := authPlugin.cache.DeleteAuthRecord(
-				authPlugin.ctx,
-				username,
-			); err != nil {
-				log.Errorf(
-					"redis stream auth cache invalidation failed: id=%s username=%s err=%v",
-					message.ID,
-					username,
-					err,
-				)
-				return false, err
-			}
-		}
-
-		log.Infof(
-			"redis stream command processed: id=%s command=kick username=%s",
-			message.ID,
-			username,
-		)
 
 		return true, nil
 
