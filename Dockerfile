@@ -19,7 +19,8 @@ RUN set -ex; \
         build-essential \
         cmake \
         libssl-dev \
-        libcjson-dev
+        libcjson-dev \
+        libedit-dev
 
 # Build libwebsockets.
 RUN set -ex; \
