@@ -1,5 +1,5 @@
 # Define Mosquitto version
-ARG MOSQUITTO_VERSION=2.0.18
+ARG MOSQUITTO_VERSION=2.1.0
 
 # Define libwebsocket version
 # 4.3.3 includes the GCC enum-int-mismatch fix
