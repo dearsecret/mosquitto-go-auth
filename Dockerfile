@@ -50,7 +50,9 @@ WORKDIR /app
 RUN mkdir -p mosquitto/auth mosquitto/conf.d
 
 RUN wget \
+    --inet4-only \
     --tries=5 \
+    --timeout=30 \
     --waitretry=3 \
     --retry-connrefused \
     https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz \
