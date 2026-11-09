@@ -20,7 +20,8 @@ RUN set -ex; \
         cmake \
         libssl-dev \
         libcjson-dev \
-        libedit-dev
+        libedit-dev \
+        libmicrohttpd-dev
 
 # Build libwebsockets.
 RUN set -ex; \
