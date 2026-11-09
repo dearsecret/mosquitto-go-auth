@@ -21,7 +21,8 @@ RUN set -ex; \
         libssl-dev \
         libcjson-dev \
         libedit-dev \
-        libmicrohttpd-dev
+        libmicrohttpd-dev \
+        libsqlite3-dev
 
 # Build libwebsockets.
 RUN set -ex; \
