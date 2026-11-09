@@ -6,7 +6,7 @@ ARG MOSQUITTO_VERSION=2.1.0
 ARG LWS_VERSION=4.3.3
 
 # Use debian:stable-slim as a builder for Mosquitto and dependencies.
-FROM debian:stable-slim as mosquitto_builder
+FROM debian:stable-slim AS mosquitto_builder
 
 ARG MOSQUITTO_VERSION
 ARG LWS_VERSION
@@ -82,6 +82,10 @@ RUN set -ex; \
 
 # Use golang:latest as a builder for the Mosquitto Go Auth plugin.
 FROM --platform=$BUILDPLATFORM golang:latest AS go_auth_builder
+
+RUN apt-get update && \
+    apt-get install -y libcjson-dev
+
 
 ENV CGO_CFLAGS="-I/usr/local/include -fPIC"
 ENV CGO_LDFLAGS="-shared -Wl,-unresolved-symbols=ignore-all"
