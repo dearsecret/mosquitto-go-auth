@@ -5,6 +5,9 @@
 static mosquitto_plugin_id_t *mosq_pid = NULL;
 
 /* Implemented in Go. */
+extern void GoSetRedisOption(char *key, char *value);
+extern int GoInitRedis(void);
+extern void GoCloseRedis(void);
 extern void GoOnDisconnect(char *username, char *client_id, int reason);
 
 static int disconnect_callback(int event, void *event_data, void *userdata)
@@ -55,11 +58,23 @@ int mosquitto_plugin_init(
     int opt_count
 )
 {
+    int i;
+    int rc;
+
     (void)user_data;
-    (void)opts;
-    (void)opt_count;
 
     mosq_pid = identifier;
+
+    /* Redis 설정을 Go로 전달 */
+    for (i = 0; i < opt_count; i++) {
+        GoSetRedisOption(opts[i].key, opts[i].value);
+    }
+
+    /* Redis 클라이언트 초기화 */
+    rc = GoInitRedis();
+    if (rc != 0) {
+        return MOSQ_ERR_UNKNOWN;
+    }
 
     return mosquitto_callback_register(
         mosq_pid,
@@ -80,10 +95,14 @@ int mosquitto_plugin_cleanup(
     (void)opts;
     (void)opt_count;
 
-    return mosquitto_callback_unregister(
+    mosquitto_callback_unregister(
         mosq_pid,
         MOSQ_EVT_DISCONNECT,
         disconnect_callback,
         NULL
     );
+
+    GoCloseRedis();
+
+    return MOSQ_ERR_SUCCESS;
 }
