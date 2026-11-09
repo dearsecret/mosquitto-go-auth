@@ -52,14 +52,21 @@ WORKDIR /app
 
 RUN mkdir -p mosquitto/auth mosquitto/conf.d
 
-RUN wget \
-    --inet4-only \
-    --tries=5 \
-    --timeout=30 \
-    --waitretry=3 \
-    --retry-connrefused \
-    https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz \
-    -O mosquitto-${MOSQUITTO_VERSION}.tar.gz
+RUN set -ex; \
+    for i in 1 2 3 4 5; do \
+        rm -f mosquitto-${MOSQUITTO_VERSION}.tar.gz; \
+        if wget \
+            --inet4-only \
+            --timeout=60 \
+            --tries=3 \
+            --waitretry=5 \
+            https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz \
+            -O mosquitto-${MOSQUITTO_VERSION}.tar.gz; then \
+            break; \
+        fi; \
+        sleep 5; \
+    done; \
+    test -s mosquitto-${MOSQUITTO_VERSION}.tar.gz
 
 RUN tar xzvf mosquitto-${MOSQUITTO_VERSION}.tar.gz
 
