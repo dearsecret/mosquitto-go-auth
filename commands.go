@@ -329,6 +329,8 @@ func (c *RedisStreamConsumer) writeResult(
 
 	return c.client.XAdd(c.ctx, &redis.XAddArgs{
 		Stream: responseStream,
+		MaxLen: 10000,
+    	Approx: true,
 		Values: values,
 	}).Err()
 }
