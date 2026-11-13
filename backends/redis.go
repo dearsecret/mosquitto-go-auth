@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	. "github.com/iegomez/mosquitto-go-auth/backends/constants"
 	"github.com/iegomez/mosquitto-go-auth/backends/topics"
 	"github.com/iegomez/mosquitto-go-auth/hashing"
+	goredis "github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -19,7 +19,7 @@ type RedisClient interface {
 	HGet(ctx context.Context, key, field string) *goredis.StringCmd
 	HKeys(ctx context.Context, key string) *goredis.StringSliceCmd
 	HGetEXWithArgs(ctx context.Context, key string, options *goredis.HGetEXOptions, fields ...string) *goredis.StringSliceCmd
-	HSetEXWithArgs(ctx context.Context,key string,options *goredis.HSetEXOptions,fieldsAndValues ...string,) *goredis.IntCmd
+	HSetEXWithArgs(ctx context.Context, key string, options *goredis.HSetEXOptions, fieldsAndValues ...string) *goredis.IntCmd
 	Del(ctx context.Context, keys ...string) *goredis.IntCmd
 	Publish(ctx context.Context, channel string, message interface{}) *goredis.IntCmd
 	Ping(ctx context.Context) *goredis.StatusCmd
@@ -140,7 +140,7 @@ func isMovedError(err error) bool {
 	return false
 }
 
-//GetUser checks that the username exists and the given password hashes to the same password.
+// GetUser checks that the username exists and the given password hashes to the same password.
 func (o Redis) GetUser(username, password, _ string) (bool, error) {
 	ok, err := o.getUser(username, password)
 	if err == nil {
@@ -176,7 +176,7 @@ func (o Redis) getUser(username, password string) (bool, error) {
 	return false, nil
 }
 
-//GetSuperuser checks that the key username:su exists and has value "true".
+// GetSuperuser checks that the key username:su exists and has value "true".
 func (o Redis) GetSuperuser(username string) (bool, error) {
 	if o.disableSuperuser {
 		return false, nil
@@ -218,7 +218,6 @@ func (o Redis) getSuperuser(username string) (bool, error) {
 	return isSuper == "true", nil
 }
 
-
 func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, error) {
 	ok, err := o.checkAcl(username, topic, clientid, acc)
 	if err == nil {
@@ -239,7 +238,7 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 	return ok, err
 }
 
-//CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
+// CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
 
 	if acc == MOSQ_ACL_WRITE {
@@ -297,7 +296,6 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 	return false, nil
 }
 
-
 func (o Redis) containsUsername(topic, username string) bool {
 	for _, level := range strings.Split(topic, "/") {
 		if level == username {
@@ -310,8 +308,6 @@ func (o Redis) containsUsername(topic, username string) bool {
 func (o Redis) isWildcard(topic string) bool {
 	return strings.ContainsAny(topic, "+#")
 }
-
-
 
 func (o Redis) matchAcl(key, topic string) (bool, error) {
 	_, err := o.conn.HGet(o.ctx, key, topic).Result()
@@ -326,7 +322,6 @@ func (o Redis) matchAcl(key, topic string) (bool, error) {
 
 	return false, err
 }
-
 
 func (o Redis) matchCommonWildcardAcl(topic string, acc int32) (bool, error) {
 	key := o.getCommonAclKey(acc)
@@ -365,7 +360,6 @@ func (o Redis) Halt() {
 	}
 }
 
-
 func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
 	matched := topics.Match(username+"/#", topic)
 	switch acc {
@@ -375,7 +369,6 @@ func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
 
 	return false
 }
-
 
 func (o Redis) getCommonAclKey(acc int32) string {
 	switch acc {
@@ -392,7 +385,6 @@ func (o Redis) getCommonAclKey(acc int32) string {
 		return ""
 	}
 }
-
 
 func (o Redis) matchCommonWriteAcl(
 	username string,
@@ -416,7 +408,6 @@ func (o Redis) matchCommonWriteAcl(
 	return false, nil
 }
 
-
 func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
 	if strings.HasSuffix(topic, "/+") {
 		topic = strings.TrimSuffix(topic, "/+")
@@ -434,5 +425,3 @@ func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
 
 	return false, err
 }
-
-

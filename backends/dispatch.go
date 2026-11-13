@@ -56,58 +56,58 @@ static int dispatch_message(
 import "C"
 
 import (
-    "fmt"
-    "strings"
-    "unsafe"
+	"fmt"
+	"strings"
+	"unsafe"
 )
 
 func Dispatch(
-    topic string,
-    payload []byte,
-    qos int,
-    retain bool,
-    expiry uint32,
+	topic string,
+	payload []byte,
+	qos int,
+	retain bool,
+	expiry uint32,
 ) error {
-    if topic == "" {
-        return fmt.Errorf("dispatch topic is empty")
-    }
+	if topic == "" {
+		return fmt.Errorf("dispatch topic is empty")
+	}
 
-    if strings.ContainsAny(topic, "+#") {
-        return fmt.Errorf("dispatch topic must not contain wildcards: %q", topic)
-    }
+	if strings.ContainsAny(topic, "+#") {
+		return fmt.Errorf("dispatch topic must not contain wildcards: %q", topic)
+	}
 
-    if strings.ContainsRune(topic, '\x00') {
-        return fmt.Errorf("dispatch topic contains a null byte")
-    }
+	if strings.ContainsRune(topic, '\x00') {
+		return fmt.Errorf("dispatch topic contains a null byte")
+	}
 
-    if qos < 0 || qos > 2 {
-        return fmt.Errorf("invalid dispatch qos: %d", qos)
-    }
+	if qos < 0 || qos > 2 {
+		return fmt.Errorf("invalid dispatch qos: %d", qos)
+	}
 
-    if len(payload) > 268435455 {
-        return fmt.Errorf("dispatch payload is too large: %d bytes", len(payload))
-    }
+	if len(payload) > 268435455 {
+		return fmt.Errorf("dispatch payload is too large: %d bytes", len(payload))
+	}
 
-    cTopic := C.CString(topic)
-    defer C.free(unsafe.Pointer(cTopic))
+	cTopic := C.CString(topic)
+	defer C.free(unsafe.Pointer(cTopic))
 
-    var payloadPtr unsafe.Pointer
-    if len(payload) > 0 {
-        payloadPtr = unsafe.Pointer(&payload[0])
-    }
+	var payloadPtr unsafe.Pointer
+	if len(payload) > 0 {
+		payloadPtr = unsafe.Pointer(&payload[0])
+	}
 
-    ret := C.dispatch_message(
-        cTopic,
-        payloadPtr,
-        C.int(len(payload)),
-        C.int(qos),
-        C.bool(retain),
-        C.uint32_t(expiry),
-    )
+	ret := C.dispatch_message(
+		cTopic,
+		payloadPtr,
+		C.int(len(payload)),
+		C.int(qos),
+		C.bool(retain),
+		C.uint32_t(expiry),
+	)
 
-    if ret != 0 {
-        return fmt.Errorf("mosquitto broker dispatch failed: %d", int(ret))
-    }
+	if ret != 0 {
+		return fmt.Errorf("mosquitto broker dispatch failed: %d", int(ret))
+	}
 
-    return nil
+	return nil
 }

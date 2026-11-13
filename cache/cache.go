@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	goredis "github.com/redis/go-redis/v9"
 	bes "github.com/iegomez/mosquitto-go-auth/backends"
 	"github.com/jellydator/ttlcache/v3"
+	goredis "github.com/redis/go-redis/v9"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -46,7 +46,7 @@ type Store interface {
 	SetAuthRecord(ctx context.Context, username, password, granted string) error
 	CheckAuthRecord(ctx context.Context, username, password string) (bool, bool)
 	SetACLRecord(ctx context.Context, username, topic, clientid string, acc int, granted string) error
-	DeleteAuthRecord(ctx context.Context,username string,) error
+	DeleteAuthRecord(ctx context.Context, username string) error
 	CheckACLRecord(ctx context.Context, username, topic, clientid string, acc int) (bool, bool)
 	Connect(ctx context.Context, reset bool) bool
 	Close()
@@ -113,9 +113,9 @@ func NewRedisClusterStore(password string, addresses []string, authExpiration, a
 }
 
 func toAuthRecord(username, password string) string {
-    value := fmt.Sprintf("auth-%s-%s", username, password)
-    digest := sha256.Sum256([]byte(value))
-    return b64.StdEncoding.EncodeToString(digest[:])
+	value := fmt.Sprintf("auth-%s-%s", username, password)
+	digest := sha256.Sum256([]byte(value))
+	return b64.StdEncoding.EncodeToString(digest[:])
 }
 
 func toACLRecord(username, topic, clientid string, acc int, h hash.Hash) string {
@@ -214,7 +214,6 @@ func (s *goStore) CheckACLRecord(ctx context.Context, username, topic, clientid 
 	return s.checkRecord(ctx, record, expirationWithJitter(s.aclExpiration, s.aclJitter))
 }
 
-
 func (s *redisStore) CheckACLRecord(
 	ctx context.Context,
 	username, topic, clientid string,
@@ -242,7 +241,6 @@ func (s *goStore) checkRecord(ctx context.Context, record string, expirationTime
 
 	return present, item.Value()
 }
-
 
 func (s *redisStore) checkRecord(ctx context.Context, key, field string, expirationTime time.Duration) (bool, bool) {
 
@@ -367,37 +365,35 @@ func (s *redisStore) setRecord(ctx context.Context, key, field, granted string, 
 }
 
 func (s *redisStore) set(
-    ctx context.Context,
-    key string,
-    field string,
-    granted string,
-    expirationTime time.Duration,
+	ctx context.Context,
+	key string,
+	field string,
+	granted string,
+	expirationTime time.Duration,
 ) error {
-    options := &goredis.HSetEXOptions{
-        ExpirationType: goredis.HSetEXExpirationEX,
-        ExpirationVal:  int64(expirationTime / time.Second),
-    }
+	options := &goredis.HSetEXOptions{
+		ExpirationType: goredis.HSetEXExpirationEX,
+		ExpirationVal:  int64(expirationTime / time.Second),
+	}
 
-    return s.client.HSetEXWithArgs(
-        ctx,
-        key,
-        options,
-        field,
-        granted,
-    ).Err()
+	return s.client.HSetEXWithArgs(
+		ctx,
+		key,
+		options,
+		field,
+		granted,
+	).Err()
 }
-
 
 func (s *redisStore) DeleteAuthRecord(
-    ctx context.Context,
-    username string,
+	ctx context.Context,
+	username string,
 ) error {
-    return s.client.Del(
-        ctx,
-        "auth:"+username,
-    ).Err()
+	return s.client.Del(
+		ctx,
+		"auth:"+username,
+	).Err()
 }
-
 
 func (s *goStore) DeleteAuthRecord(
 	ctx context.Context,

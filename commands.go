@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -26,24 +23,10 @@ type RedisStreamConsumer struct {
 	count         int64
 	claimIdle     time.Duration
 	claimInterval time.Duration
-	fallbackURL   string
 	maxRetries    int64
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
-	fallbackWG    sync.WaitGroup
-}
-
-type FallbackPayload struct {
-	Event     string                 `json:"event"`
-	Stream    string                 `json:"stream"`
-	Group     string                 `json:"group"`
-	Consumer  string                 `json:"consumer"`
-	MessageID string                 `json:"message_id"`
-	Command   string                 `json:"command"`
-	Values    map[string]interface{} `json:"values"`
-	Error     string                 `json:"error"`
-	Timestamp int64                  `json:"timestamp"`
 }
 
 func streamIntOption(opts map[string]string, key string, fallback int64) int64 {
@@ -149,7 +132,6 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 		count:         count,
 		claimIdle:     claimIdle,
 		claimInterval: claimInterval,
-		fallbackURL:   strings.TrimSpace(opts["fallback_url"]),
 		ctx:           ctx,
 		cancel:        cancel,
 		maxRetries:    streamIntOption(opts, "redis_stream_max_retries", 3),
@@ -164,7 +146,6 @@ func (c *RedisStreamConsumer) Start() {
 func (c *RedisStreamConsumer) Stop() {
 	c.cancel()
 	c.wg.Wait()
-	c.fallbackWG.Wait()
 
 	if err := c.client.Close(); err != nil {
 		log.Errorf("redis stream close failed: %v", err)
@@ -318,9 +299,69 @@ func streamString(value interface{}) string {
 	return fmt.Sprint(value)
 }
 
+func (c *RedisStreamConsumer) writeResult(
+	message redis.XMessage,
+	status string,
+	err error,
+) error {
+	responseStream := strings.TrimSpace(
+		streamString(message.Values["response_stream"]),
+	)
+
+	// 응답 요청이 없으면 아무것도 하지 않음
+	if responseStream == "" {
+		return nil
+	}
+
+	originalID := streamString(message.Values["original_id"])
+	if originalID == "" {
+		originalID = message.ID
+	}
+
+	values := map[string]interface{}{
+		"original_id": originalID,
+		"status":      status,
+	}
+
+	if err != nil {
+		values["error"] = err.Error()
+	}
+
+	return c.client.XAdd(c.ctx, &redis.XAddArgs{
+		Stream: responseStream,
+		Values: values,
+	}).Err()
+}
+
 func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 	success, err := c.processCommand(message)
 
+	// response_stream이 있으면 동기 요청이므로 재시도하지 않음
+	responseStream := strings.TrimSpace(
+		streamString(message.Values["response_stream"]),
+	)
+
+	if responseStream != "" {
+		status := "success"
+		if !success {
+			status = "error"
+		}
+
+		if resultErr := c.writeResult(message, status, err); resultErr != nil {
+			log.Errorf(
+				"redis stream result write failed: id=%s err=%v",
+				message.ID,
+				resultErr,
+			)
+			return
+		}
+
+		// 결과 기록 성공 후 ACK
+		_ = c.ackMessage(message.ID)
+		return
+	}
+
+	// 여기부터는 비동기 요청: 기존 재시도 정책 유지
 	if success {
 		_ = c.ackMessage(message.ID)
 		return
@@ -350,16 +391,7 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 		err,
 	)
 
-	if err != nil && c.fallbackURL != "" {
-		c.fallbackWG.Add(1)
-
-		go func() {
-			defer c.fallbackWG.Done()
-			c.sendFallback(message, err)
-		}()
-	}
-
-	c.ackMessage(message.ID)
+	_ = c.ackMessage(message.ID)
 }
 
 func (c *RedisStreamConsumer) ackMessage(messageID string) error {
@@ -436,11 +468,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		)
 
 		if username == "" {
-			log.Errorf(
-				"redis stream kick missing username: id=%s",
-				message.ID,
-			)
-			return true, nil
+			return false, fmt.Errorf("kick missing username")
 		}
 
 		if authPlugin.useCache && authPlugin.cache != nil {
@@ -470,11 +498,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		)
 
 		if topic == "" {
-			log.Errorf(
-				"redis stream dispatch missing topic: id=%s",
-				message.ID,
-			)
-			return true, nil
+			return false, fmt.Errorf("dispatch missing topic")
 		}
 
 		payload := []byte(streamString(message.Values["payload"]))
@@ -483,12 +507,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["qos"]); value != "" {
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 0 || parsed > 2 {
-				log.Errorf(
-					"redis stream dispatch invalid qos: id=%s qos=%q",
-					message.ID,
-					value,
-				)
-				return true, nil
+				return false, fmt.Errorf("invalid qos: %q", value)
 			}
 			qos = parsed
 		}
@@ -497,12 +516,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["retain"]); value != "" {
 			parsed, err := strconv.ParseBool(value)
 			if err != nil {
-				log.Errorf(
-					"redis stream dispatch invalid retain: id=%s retain=%q",
-					message.ID,
-					value,
-				)
-				return true, nil
+				return false, fmt.Errorf("invalid retain: %q", value)
 			}
 			retain = parsed
 		}
@@ -511,12 +525,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["expiry_seconds"]); value != "" {
 			parsed, err := strconv.ParseUint(value, 10, 32)
 			if err != nil {
-				log.Errorf(
-					"redis stream dispatch invalid expiry: id=%s expiry=%q",
-					message.ID,
-					value,
-				)
-				return true, nil
+				return false, fmt.Errorf("invalid expiry: %q", value)
 			}
 			expiry = uint32(parsed)
 		}
@@ -543,66 +552,6 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		return true, nil
 
 	default:
-		log.Errorf(
-			"unsupported redis stream command: id=%s command=%q",
-			message.ID,
-			command,
-		)
-		return true, nil
+		return false, fmt.Errorf("unsupported command: %q", command)
 	}
 }
-
-var fallbackHTTPClient = &http.Client{
-	Timeout: 2 * time.Second,
-}
-
-func (c *RedisStreamConsumer) sendFallback(
-	message redis.XMessage,
-	err error,
-) {
-	if c.fallbackURL == "" || err == nil {
-		return
-	}
-
-	payload := FallbackPayload{
-		Event:     "redis_stream_failed",
-		Stream:    c.stream,
-		Group:     c.group,
-		Consumer:  c.consumer,
-		MessageID: message.ID,
-		Command:   streamString(message.Values["command"]),
-		Values:    message.Values,
-		Error:     err.Error(),
-		Timestamp: time.Now().Unix(),
-	}
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Errorf("fallback marshal failed: %v", err)
-		return
-	}
-
-	req, err := http.NewRequest(
-		http.MethodPost,
-		c.fallbackURL,
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		log.Errorf("fallback request failed: %v", err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := fallbackHTTPClient.Do(req)
-	if err != nil {
-		log.Errorf("fallback send failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Errorf("fallback returned status: %s", resp.Status)
-	}
-}
-

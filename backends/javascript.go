@@ -139,7 +139,7 @@ func (o *Javascript) CheckAcl(username, topic, clientid string, acc int32) (bool
 	return granted, err
 }
 
-//GetName returns the backend's name
+// GetName returns the backend's name
 func (o *Javascript) GetName() string {
 	return "Javascript"
 }

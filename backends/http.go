@@ -303,12 +303,12 @@ func (o HTTP) httpRequest(uri, username string, dataMap map[string]interface{}, 
 
 }
 
-//GetName returns the backend's name
+// GetName returns the backend's name
 func (o HTTP) GetName() string {
 	return "HTTP"
 }
 
-//Halt does nothing for http as there's no cleanup needed.
+// Halt does nothing for http as there's no cleanup needed.
 func (o HTTP) Halt() {
 	//Do nothing
 }

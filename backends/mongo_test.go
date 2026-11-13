@@ -204,7 +204,7 @@ func TestMongoRaw(t *testing.T) {
 	})
 }
 
-//UTF-8 salt and basic testing
+// UTF-8 salt and basic testing
 func TestMongoUtf8(t *testing.T) {
 
 	// Mongo Connection Details
