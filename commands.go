@@ -24,7 +24,6 @@ type RedisStreamConsumer struct {
 	count         int64
 	claimIdle     time.Duration
 	claimInterval time.Duration
-	maxRetries    int64
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
@@ -135,7 +134,6 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 		claimInterval: claimInterval,
 		ctx:           ctx,
 		cancel:        cancel,
-		maxRetries:    streamIntOption(opts, "redis_stream_max_retries", 3),
 	}, nil
 }
 
@@ -300,76 +298,72 @@ func streamString(value interface{}) string {
 	return fmt.Sprint(value)
 }
 
-func (c *RedisStreamConsumer) writeResult(message redis.XMessage) {
+
+func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
     channel := strings.TrimSpace(
         streamString(message.Values["channel"]),
     )
 
-    if channel == "" {
-        return
+    // 응답을 기다리는 요청은 실행 전에 원본 메시지 제거
+    if channel != "" {
+        if err := c.ackMessage(message.ID); err != nil {
+            return
+        }
+
+        if err := c.client.XDel(c.ctx, c.stream, message.ID).Err(); err != nil {
+            log.Errorf(
+                "redis stream delete failed: id=%s err=%v",
+                message.ID,
+                err,
+            )
+        }
     }
 
-    originalID := streamString(message.Values["original_id"])
-	if originalID == "" {
-		originalID = message.ID
-	}
-
-	err := c.client.XAdd(c.ctx, &redis.XAddArgs{
-		Stream: channel,
-		MaxLen: 10000,
-		Approx: true,
-		Values: map[string]interface{}{
-			"original_id": originalID,
-		},
-	}).Err()
-
-    if err != nil {
-        log.Errorf(
-            "redis stream response failed: id=%s stream=%s err=%v",
-            message.ID,
-            channel,
-            err,
-        )
-    }
-}
-
-func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
     success, err := c.processCommand(message)
 
-    if success {
-        // kick, dispatch, make 등 모든 명령에 공통 적용
-        c.writeResult(message)
-        _ = c.ackMessage(message.ID)
+    if !success {
+        log.Errorf(
+            "redis stream command failed: id=%s err=%v",
+            message.ID,
+            err,
+        )
         return
     }
 
-    retryCount, _ := strconv.ParseInt(
-        streamString(message.Values["retry_count"]),
-        10,
-        64,
-    )
-
-    if retryCount < c.maxRetries {
-        if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
+    // channel이 있을 때만 성공 응답 전달
+    if channel != "" {
+        if err := c.client.XAdd(c.ctx, &redis.XAddArgs{
+            Stream: channel,
+            MaxLen: 100,
+            Approx: false,
+            Values: map[string]interface{}{
+				"mid":     message.ID,
+				"success": "true",
+			},
+        }).Err(); err != nil {
             log.Errorf(
-                "redis stream retry handoff failed: id=%s err=%v",
+                "redis stream response failed: id=%s channel=%s err=%v",
                 message.ID,
-                retryErr,
+                channel,
+                err,
             )
         }
         return
     }
 
-    log.Errorf(
-        "redis stream max retries exceeded: id=%s retries=%d err=%v",
-        message.ID,
-        retryCount,
-        err,
-    )
+    // 일반 fire-and-forget 요청은 실행 후 원본 메시지 제거
+    if err := c.ackMessage(message.ID); err != nil {
+        return
+    }
 
-    _ = c.ackMessage(message.ID)
+    if err := c.client.XDel(c.ctx, c.stream, message.ID).Err(); err != nil {
+        log.Errorf(
+            "redis stream delete failed: id=%s err=%v",
+            message.ID,
+            err,
+        )
+    }
 }
-
 
 
 func (c *RedisStreamConsumer) ackMessage(messageID string) error {
@@ -385,54 +379,7 @@ func (c *RedisStreamConsumer) ackMessage(messageID string) error {
 	return nil
 }
 
-func (c *RedisStreamConsumer) retryMessage(
-	message redis.XMessage,
-	retryCount int64,
-) error {
-	values := make(map[string]interface{}, len(message.Values)+2)
 
-	for key, value := range message.Values {
-		values[key] = value
-	}
-
-	values["retry_count"] = retryCount
-	values["original_id"] = streamString(
-		message.Values["original_id"],
-	)
-
-	if values["original_id"] == "" {
-		values["original_id"] = message.ID
-	}
-
-	newID, err := c.client.XAdd(
-		c.ctx,
-		&redis.XAddArgs{
-			Stream: c.stream,
-			Values: values,
-		},
-	).Result()
-
-	if err != nil {
-		return fmt.Errorf("retry XADD failed: %w", err)
-	}
-
-	log.Warnf(
-		"redis stream retry scheduled: original_id=%s new_id=%s retry=%d/%d",
-		values["original_id"],
-		newID,
-		retryCount,
-		c.maxRetries,
-	)
-
-	if err := c.ackMessage(message.ID); err != nil {
-		return fmt.Errorf(
-			"retry message created but original ACK failed: %w",
-			err,
-		)
-	}
-
-	return nil
-}
 
 func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, error) {
 	command := strings.ToLower(
