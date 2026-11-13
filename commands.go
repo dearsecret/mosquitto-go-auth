@@ -14,6 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+
 type RedisStreamConsumer struct {
 	client        redis.UniversalClient
 	stream        string
@@ -299,102 +300,77 @@ func streamString(value interface{}) string {
 	return fmt.Sprint(value)
 }
 
-func (c *RedisStreamConsumer) writeResult(
-	message redis.XMessage,
-	status string,
-	err error,
-) error {
-	responseStream := strings.TrimSpace(
-		streamString(message.Values["response_stream"]),
-	)
+func (c *RedisStreamConsumer) writeResult(message redis.XMessage) {
+    channel := strings.TrimSpace(
+        streamString(message.Values["channel"]),
+    )
 
-	// 응답 요청이 없으면 아무것도 하지 않음
-	if responseStream == "" {
-		return nil
-	}
+    if channel == "" {
+        return
+    }
 
-	originalID := streamString(message.Values["original_id"])
+    originalID := streamString(message.Values["original_id"])
 	if originalID == "" {
 		originalID = message.ID
 	}
 
-	values := map[string]interface{}{
-		"original_id": originalID,
-		"status":      status,
-	}
-
-	if err != nil {
-		values["error"] = err.Error()
-	}
-
-	return c.client.XAdd(c.ctx, &redis.XAddArgs{
-		Stream: responseStream,
+	err := c.client.XAdd(c.ctx, &redis.XAddArgs{
+		Stream: channel,
 		MaxLen: 10000,
-    	Approx: true,
-		Values: values,
+		Approx: true,
+		Values: map[string]interface{}{
+			"original_id": originalID,
+		},
 	}).Err()
+
+    if err != nil {
+        log.Errorf(
+            "redis stream response failed: id=%s stream=%s err=%v",
+            message.ID,
+            channel,
+            err,
+        )
+    }
 }
 
 func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
-	success, err := c.processCommand(message)
+    success, err := c.processCommand(message)
 
-	// response_stream이 있으면 동기 요청이므로 재시도하지 않음
-	responseStream := strings.TrimSpace(
-		streamString(message.Values["response_stream"]),
-	)
+    if success {
+        // kick, dispatch, make 등 모든 명령에 공통 적용
+        c.writeResult(message)
+        _ = c.ackMessage(message.ID)
+        return
+    }
 
-	if responseStream != "" {
-		status := "success"
-		if !success {
-			status = "error"
-		}
+    retryCount, _ := strconv.ParseInt(
+        streamString(message.Values["retry_count"]),
+        10,
+        64,
+    )
 
-		if resultErr := c.writeResult(message, status, err); resultErr != nil {
-			log.Errorf(
-				"redis stream result write failed: id=%s err=%v",
-				message.ID,
-				resultErr,
-			)
-			return
-		}
+    if retryCount < c.maxRetries {
+        if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
+            log.Errorf(
+                "redis stream retry handoff failed: id=%s err=%v",
+                message.ID,
+                retryErr,
+            )
+        }
+        return
+    }
 
-		// 결과 기록 성공 후 ACK
-		_ = c.ackMessage(message.ID)
-		return
-	}
+    log.Errorf(
+        "redis stream max retries exceeded: id=%s retries=%d err=%v",
+        message.ID,
+        retryCount,
+        err,
+    )
 
-	// 여기부터는 비동기 요청: 기존 재시도 정책 유지
-	if success {
-		_ = c.ackMessage(message.ID)
-		return
-	}
-
-	retryCount, _ := strconv.ParseInt(
-		streamString(message.Values["retry_count"]),
-		10,
-		64,
-	)
-
-	if retryCount < c.maxRetries {
-		if retryErr := c.retryMessage(message, retryCount+1); retryErr != nil {
-			log.Errorf(
-				"redis stream retry handoff failed: id=%s err=%v",
-				message.ID,
-				retryErr,
-			)
-		}
-		return
-	}
-
-	log.Errorf(
-		"redis stream max retries exceeded: id=%s retries=%d err=%v",
-		message.ID,
-		retryCount,
-		err,
-	)
-
-	_ = c.ackMessage(message.ID)
+    _ = c.ackMessage(message.ID)
 }
+
+
 
 func (c *RedisStreamConsumer) ackMessage(messageID string) error {
 	if err := c.client.XAck(
@@ -552,7 +528,6 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		)
 
 		return true, nil
-
 	default:
 		return false, fmt.Errorf("unsupported command: %q", command)
 	}
