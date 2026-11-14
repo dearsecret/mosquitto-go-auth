@@ -421,23 +421,22 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 }
 
 func (c *RedisStreamConsumer) Make(
-    key, topic string,
+	key, topic string,
 ) (string, error) {
-    value, err := c.client.HGet(c.ctx, key, topic).Result()
-    if err == redis.Nil {
-        return "", nil
-    }
-    if err != nil {
-        return "", err
-    }
+	value, err := c.client.HGet(c.ctx, key, topic).Result()
+	if err == redis.Nil {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
 
-    if _, err := strconv.ParseInt(value, 10, 64); err != nil {
-        return "", fmt.Errorf("invalid timestamp: %w", err)
-    }
+	if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+		return "", fmt.Errorf("invalid timestamp: %w", err)
+	}
 
-    return value, nil
+	return value, nil
 }
-
 
 func (c *RedisStreamConsumer) processCommand(
 	message redis.XMessage,
@@ -570,18 +569,18 @@ func (c *RedisStreamConsumer) processCommand(
 			expiry = uint32(parsed)
 		}
 
-		createdAt, rawTimestamp, err := c.Make(key, topic)
+		timestamp, err := c.Make(key, topic)
 		if err != nil {
 			return false, err, nil
 		}
 
-		if createdAt == "" {
+		if timestamp == "" {
 			return true, nil, nil
 		}
 
 		if err := bes.Dispatch(
 			topic,
-			[]byte(createdAt),
+			[]byte(timestamp),
 			qos,
 			retain,
 			expiry,
@@ -589,19 +588,10 @@ func (c *RedisStreamConsumer) processCommand(
 			return false, fmt.Errorf("make dispatch failed: %w", err), nil
 		}
 
-		log.Infof(
-			"redis stream command processed: id=%s command=make topic=%s qos=%d retain=%t expiry=%ds",
-			message.ID,
-			topic,
-			qos,
-			retain,
-			expiry,
-		)
-
 		return true, nil, &MessageCleanup{
 			key:       key,
 			topic:     topic,
-			timestamp: rawTimestamp,
+			timestamp: timestamp,
 		}
 	default:
 		return false, fmt.Errorf("unsupported command: %q", command), nil
