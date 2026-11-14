@@ -421,25 +421,23 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 }
 
 func (c *RedisStreamConsumer) Make(
-	key, topic string,
-) (string, string, error) {
-	value, err := c.client.HGet(c.ctx, key, topic).Result()
-	if err == redis.Nil {
-		return "", "", nil
-	}
-	if err != nil {
-		return "", "", err
-	}
+    key, topic string,
+) (string, error) {
+    value, err := c.client.HGet(c.ctx, key, topic).Result()
+    if err == redis.Nil {
+        return "", nil
+    }
+    if err != nil {
+        return "", err
+    }
 
-	timestamp, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid timestamp: %w", err)
-	}
+    if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+        return "", fmt.Errorf("invalid timestamp: %w", err)
+    }
 
-	createdAt := time.UnixMicro(timestamp).UTC().Format(time.RFC3339Nano)
-
-	return createdAt, value, nil
+    return value, nil
 }
+
 
 func (c *RedisStreamConsumer) processCommand(
 	message redis.XMessage,
