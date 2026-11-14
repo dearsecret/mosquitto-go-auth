@@ -15,18 +15,19 @@ import (
 )
 
 type RedisStreamConsumer struct {
-	client        redis.UniversalClient
-	stream        string
-	group         string
-	consumer      string
-	block         time.Duration
-	count         int64
-	claimIdle     time.Duration
-	claimInterval time.Duration
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	startOnce 	  sync.Once
+	client           redis.UniversalClient
+	stream           string
+	group            string
+	consumer         string
+	block            time.Duration
+	count            int64
+	claimIdle        time.Duration
+	claimInterval    time.Duration
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	startOnce        sync.Once
+	maxDeliveryCount int64
 }
 
 type MessageCleanup struct {
@@ -100,6 +101,12 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 
 	var client redis.UniversalClient
 
+	maxDeliveryCount := streamIntOption(
+		opts,
+		"redis_stream_max_delivery",
+		5,
+	)
+
 	if opts["redis_mode"] == "cluster" {
 		addressesOpt := strings.TrimSpace(opts["redis_cluster_addresses"])
 		if addressesOpt == "" {
@@ -130,24 +137,25 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &RedisStreamConsumer{
-		client:        client,
-		stream:        stream,
-		group:         group,
-		consumer:      consumer,
-		block:         block,
-		count:         count,
-		claimIdle:     claimIdle,
-		claimInterval: claimInterval,
-		ctx:           ctx,
-		cancel:        cancel,
+		client:           client,
+		stream:           stream,
+		group:            group,
+		consumer:         consumer,
+		block:            block,
+		count:            count,
+		claimIdle:        claimIdle,
+		claimInterval:    claimInterval,
+		ctx:              ctx,
+		cancel:           cancel,
+		maxDeliveryCount: maxDeliveryCount,
 	}, nil
 }
 
 func (c *RedisStreamConsumer) Start() {
-    c.startOnce.Do(func() {
-        c.wg.Add(1)
-        go c.run()
-    })
+	c.startOnce.Do(func() {
+		c.wg.Add(1)
+		go c.run()
+	})
 }
 
 func (c *RedisStreamConsumer) Stop() {
@@ -380,11 +388,11 @@ func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
 			"redis stream command failed: id=%s delivery=%d/%d err=%v",
 			message.ID,
 			retryCount,
-			maxDeliveryCount,
+			c.maxDeliveryCount,
 			err,
 		)
 
-		if retryCount >= maxDeliveryCount {
+		if retryCount >= c.maxDeliveryCount {
 			log.Errorf(
 				"redis stream max delivery exceeded: id=%s delivery=%d",
 				message.ID,
