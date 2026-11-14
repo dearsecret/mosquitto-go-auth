@@ -14,7 +14,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-
 type RedisStreamConsumer struct {
 	client        redis.UniversalClient
 	stream        string
@@ -27,6 +26,13 @@ type RedisStreamConsumer struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
+	startOnce 	  sync.Once
+}
+
+type MessageCleanup struct {
+	key       string
+	topic     string
+	timestamp string
 }
 
 func streamIntOption(opts map[string]string, key string, fallback int64) int64 {
@@ -138,8 +144,10 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 }
 
 func (c *RedisStreamConsumer) Start() {
-	c.wg.Add(1)
-	go c.run()
+    c.startOnce.Do(func() {
+        c.wg.Add(1)
+        go c.run()
+    })
 }
 
 func (c *RedisStreamConsumer) Stop() {
@@ -298,90 +306,136 @@ func streamString(value interface{}) string {
 	return fmt.Sprint(value)
 }
 
+const COMPLETE_COMMAND = `
+if ARGV[3] ~= '' then
+    local current = redis.call('HGET', KEYS[1], ARGV[3])
 
-func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
-    channel := strings.TrimSpace(
-        streamString(message.Values["channel"]),
-    )
+    if current and current == ARGV[4] then
+        redis.call('HDEL', KEYS[1], ARGV[3])
+    end
+end
 
-    // 응답을 기다리는 요청은 실행 전에 원본 메시지 제거
-    if channel != "" {
-        if err := c.ackMessage(message.ID); err != nil {
-            return
-        }
+redis.call('XACK', KEYS[2], ARGV[1], ARGV[2])
+redis.call('XDEL', KEYS[2], ARGV[2])
 
-        if err := c.client.XDel(c.ctx, c.stream, message.ID).Err(); err != nil {
-            log.Errorf(
-                "redis stream delete failed: id=%s err=%v",
-                message.ID,
-                err,
-            )
-        }
-    }
+return 1
+`
 
-    success, err := c.processCommand(message)
+func (c *RedisStreamConsumer) completeMessage(
+	messageID string,
+	cleanup *MessageCleanup,
+) error {
+	key := c.stream
+	topic := ""
+	timestamp := ""
 
-    if !success {
-        log.Errorf(
-            "redis stream command failed: id=%s err=%v",
-            message.ID,
-            err,
-        )
-        return
-    }
+	if cleanup != nil {
+		key = cleanup.key
+		topic = cleanup.topic
+		timestamp = cleanup.timestamp
+	}
 
-    // channel이 있을 때만 성공 응답 전달
-    if channel != "" {
-        if err := c.client.XAdd(c.ctx, &redis.XAddArgs{
-            Stream: channel,
-            MaxLen: 100,
-            Approx: false,
-            Values: map[string]interface{}{
-				"mid":     message.ID,
-				"success": "true",
-			},
-        }).Err(); err != nil {
-            log.Errorf(
-                "redis stream response failed: id=%s channel=%s err=%v",
-                message.ID,
-                channel,
-                err,
-            )
-        }
-        return
-    }
-
-    // 일반 fire-and-forget 요청은 실행 후 원본 메시지 제거
-    if err := c.ackMessage(message.ID); err != nil {
-        return
-    }
-
-    if err := c.client.XDel(c.ctx, c.stream, message.ID).Err(); err != nil {
-        log.Errorf(
-            "redis stream delete failed: id=%s err=%v",
-            message.ID,
-            err,
-        )
-    }
-}
-
-
-func (c *RedisStreamConsumer) ackMessage(messageID string) error {
-	if err := c.client.XAck(
+	return c.client.Eval(
 		c.ctx,
-		c.stream,
+		COMPLETE_COMMAND,
+		[]string{key, c.stream},
 		c.group,
 		messageID,
-	).Err(); err != nil {
-		log.Errorf("redis stream ack failed: id=%s err=%v", messageID, err)
-		return err
-	}
-	return nil
+		topic,
+		timestamp,
+	).Err()
 }
 
+func (c *RedisStreamConsumer) processMessage(message redis.XMessage) {
+	success, err, cleanup := c.processCommand(message)
 
+	if !success {
+		pending, pendingErr := c.client.XPendingExt(
+			c.ctx,
+			&redis.XPendingExtArgs{
+				Stream: c.stream,
+				Group:  c.group,
+				Start:  message.ID,
+				End:    message.ID,
+				Count:  1,
+			},
+		).Result()
 
-func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, error) {
+		if pendingErr != nil {
+			log.Errorf(
+				"redis stream pending check failed: id=%s err=%v",
+				message.ID,
+				pendingErr,
+			)
+			return
+		}
+
+		if len(pending) == 0 {
+			return
+		}
+
+		retryCount := pending[0].RetryCount
+
+		log.Errorf(
+			"redis stream command failed: id=%s delivery=%d/%d err=%v",
+			message.ID,
+			retryCount,
+			maxDeliveryCount,
+			err,
+		)
+
+		if retryCount >= maxDeliveryCount {
+			log.Errorf(
+				"redis stream max delivery exceeded: id=%s delivery=%d",
+				message.ID,
+				retryCount,
+			)
+
+			if err := c.completeMessage(message.ID, nil); err != nil {
+				log.Errorf(
+					"redis stream completion failed: id=%s err=%v",
+					message.ID,
+					err,
+				)
+			}
+		}
+
+		return
+	}
+
+	if err := c.completeMessage(message.ID, cleanup); err != nil {
+		log.Errorf(
+			"redis stream completion failed: id=%s err=%v",
+			message.ID,
+			err,
+		)
+	}
+}
+
+func (c *RedisStreamConsumer) Make(
+	key, topic string,
+) (string, string, error) {
+	value, err := c.client.HGet(c.ctx, key, topic).Result()
+	if err == redis.Nil {
+		return "", "", nil
+	}
+	if err != nil {
+		return "", "", err
+	}
+
+	timestamp, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid timestamp: %w", err)
+	}
+
+	createdAt := time.UnixMicro(timestamp).UTC().Format(time.RFC3339Nano)
+
+	return createdAt, value, nil
+}
+
+func (c *RedisStreamConsumer) processCommand(
+	message redis.XMessage,
+) (bool, error, *MessageCleanup) {
 	command := strings.ToLower(
 		strings.TrimSpace(streamString(message.Values["command"])),
 	)
@@ -393,7 +447,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		)
 
 		if username == "" {
-			return false, fmt.Errorf("kick missing username")
+			return false, fmt.Errorf("kick missing username"), nil
 		}
 
 		if authPlugin.useCache && authPlugin.cache != nil {
@@ -401,7 +455,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 				authPlugin.ctx,
 				username,
 			); err != nil {
-				return false, err
+				return false, err, nil
 			}
 		}
 
@@ -412,10 +466,10 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 				username,
 				err,
 			)
-			return false, err
+			return false, err, nil
 		}
 
-		return true, nil
+		return true, nil, nil
 
 	case "dispatch":
 		topic := strings.TrimSpace(
@@ -423,7 +477,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		)
 
 		if topic == "" {
-			return false, fmt.Errorf("dispatch missing topic")
+			return false, fmt.Errorf("dispatch missing topic"), nil
 		}
 
 		payload := []byte(streamString(message.Values["payload"]))
@@ -432,7 +486,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["qos"]); value != "" {
 			parsed, err := strconv.Atoi(value)
 			if err != nil || parsed < 0 || parsed > 2 {
-				return false, fmt.Errorf("invalid qos: %q", value)
+				return false, fmt.Errorf("invalid qos: %q", value), nil
 			}
 			qos = parsed
 		}
@@ -441,7 +495,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["retain"]); value != "" {
 			parsed, err := strconv.ParseBool(value)
 			if err != nil {
-				return false, fmt.Errorf("invalid retain: %q", value)
+				return false, fmt.Errorf("invalid retain: %q", value), nil
 			}
 			retain = parsed
 		}
@@ -450,7 +504,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 		if value := streamString(message.Values["expiry_seconds"]); value != "" {
 			parsed, err := strconv.ParseUint(value, 10, 32)
 			if err != nil {
-				return false, fmt.Errorf("invalid expiry: %q", value)
+				return false, fmt.Errorf("invalid expiry: %q", value), nil
 			}
 			expiry = uint32(parsed)
 		}
@@ -462,7 +516,7 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 				topic,
 				err,
 			)
-			return false, err
+			return false, err, nil
 		}
 
 		log.Infof(
@@ -474,8 +528,76 @@ func (c *RedisStreamConsumer) processCommand(message redis.XMessage) (bool, erro
 			expiry,
 		)
 
-		return true, nil
+		return true, nil, nil
+	case "make":
+		key := strings.TrimSpace(streamString(message.Values["key"]))
+		topic := strings.TrimSpace(streamString(message.Values["topic"]))
+
+		if key == "" || topic == "" {
+			return false, fmt.Errorf("make missing key or topic"), nil
+		}
+
+		qos := 0
+		if value := streamString(message.Values["qos"]); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < 0 || parsed > 2 {
+				return false, fmt.Errorf("invalid qos: %q", value), nil
+			}
+			qos = parsed
+		}
+
+		retain := true
+		if value := streamString(message.Values["retain"]); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return false, fmt.Errorf("invalid retain: %q", value), nil
+			}
+			retain = parsed
+		}
+
+		expiry := uint32(0)
+		if value := streamString(message.Values["expiry_seconds"]); value != "" {
+			parsed, err := strconv.ParseUint(value, 10, 32)
+			if err != nil {
+				return false, fmt.Errorf("invalid expiry: %q", value), nil
+			}
+			expiry = uint32(parsed)
+		}
+
+		createdAt, rawTimestamp, err := c.Make(key, topic)
+		if err != nil {
+			return false, err, nil
+		}
+
+		if createdAt == "" {
+			return true, nil, nil
+		}
+
+		if err := bes.Dispatch(
+			topic,
+			[]byte(createdAt),
+			qos,
+			retain,
+			expiry,
+		); err != nil {
+			return false, fmt.Errorf("make dispatch failed: %w", err), nil
+		}
+
+		log.Infof(
+			"redis stream command processed: id=%s command=make topic=%s qos=%d retain=%t expiry=%ds",
+			message.ID,
+			topic,
+			qos,
+			retain,
+			expiry,
+		)
+
+		return true, nil, &MessageCleanup{
+			key:       key,
+			topic:     topic,
+			timestamp: rawTimestamp,
+		}
 	default:
-		return false, fmt.Errorf("unsupported command: %q", command)
+		return false, fmt.Errorf("unsupported command: %q", command), nil
 	}
 }
