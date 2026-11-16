@@ -124,7 +124,7 @@ func NewRedisStreamConsumer(opts map[string]string) (*RedisStreamConsumer, error
 			ReadTimeout: readTimeout,
 		})
 	} else {
-		db := streamIntOption(opts, "redis_db", 1)
+		db := streamIntOption(opts, "redis_stream_db", 3)
 
 		client = redis.NewClient(&redis.Options{
 			Addr:        fmt.Sprintf("%s:%s", host, port),
@@ -568,7 +568,15 @@ func (c *RedisStreamConsumer) processCommand(
 			}
 			expiry = uint32(parsed)
 		}
+		deleteAfterPublish := true
 
+		if value := streamString(message.Values["delete"]); value != "" {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				return false, fmt.Errorf("invalid delete: %q", value), nil
+			}
+			deleteAfterPublish = parsed
+		}
 		timestamp, err := c.Make(key, topic)
 		if err != nil {
 			return false, err, nil
@@ -586,6 +594,10 @@ func (c *RedisStreamConsumer) processCommand(
 			expiry,
 		); err != nil {
 			return false, fmt.Errorf("make dispatch failed: %w", err), nil
+		}
+
+		if !deleteAfterPublish {
+			return true, nil, nil
 		}
 
 		return true, nil, &MessageCleanup{
