@@ -409,46 +409,57 @@ func (o Redis) matchCommonWriteAcl(
 }
 
 func (o Redis) matchCheckHashAcl(username, topic string, acc int32) (bool, error) {
-    parts := strings.Split(topic, "/")
+	parts := strings.Split(topic, "/")
 
-	if len(parts) < 2 || parts[1] == "" {
-        return false, nil
-    }
-	
-    switch acc {
-    case MOSQ_ACL_WRITE:
-        if len(parts) == 3 {
-            if parts[2] != username {
-                return false, nil
-            }
-            topic = strings.Join(parts[:2], "/")
-        } else if len(parts) != 2 {
-            return false, nil
-        }
+	if len(parts) < 2 || len(parts) > 3 ||
+		parts[0] != "ch" || parts[1] == "" {
+		return false, nil
+	}
 
-    case MOSQ_ACL_READ:
-        if len(parts) != 2 {
-            return false, nil
-        }
+	switch acc {
+	case MOSQ_ACL_SUBSCRIBE:
+		// 전체 채널 와일드카드 구독 허용
+		if parts[1] == "+" {
+			return len(parts) == 2 ||
+				(len(parts) == 3 && parts[2] == "+"), nil
+		}
 
-    case MOSQ_ACL_SUBSCRIBE:
-        if len(parts) == 3 && parts[2] == "+" {
-            topic = strings.Join(parts[:2], "/")
-        } else if len(parts) != 2 {
-            return false, nil
-        }
+		// 특정 채팅방의 ch/CHANNELID 또는 ch/CHANNELID/+
+		if len(parts) == 3 && parts[2] != "+" {
+			return false, nil
+		}
 
-    default:
-        return false, nil
-    }
+	case MOSQ_ACL_WRITE:
+		if len(parts) == 3 && parts[2] != username {
+			return false, nil
+		}
 
-    _, err := o.conn.HGet(o.ctx, topic, username).Result()
+	case MOSQ_ACL_READ:
+		// 실제 메시지 토픽은 2단계 또는 3단계
+		if len(parts) == 3 && parts[2] == "" {
+			return false, nil
+		}
 
-    if err == nil {
-        return true, nil
-    }
-    if err == goredis.Nil {
-        return false, nil
-    }
-    return false, err
+	default:
+		return false, nil
+	}
+
+	if parts[1] == "+" || strings.Contains(parts[1], "#") {
+		return false, nil
+	}
+
+	// 실제 채팅방 참여 여부 확인
+	_, err := o.conn.HGet(o.ctx, topicRoomKey(parts), username).Result()
+
+	if err == nil {
+		return true, nil
+	}
+	if err == goredis.Nil {
+		return false, nil
+	}
+	return false, err
+}
+
+func topicRoomKey(parts []string) string {
+	return strings.Join(parts[:2], "/")
 }
