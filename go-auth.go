@@ -559,6 +559,13 @@ func matchNoAcl(topic string, acc int, username string) bool {
     }
 
     if acc == 1 { // READ
+        // no/123
+        if len(parts) == 2 {
+            _, err := strconv.ParseUint(parts[1], 10, 64)
+            return err == nil
+        }
+
+        // no/123/456 또는 no/123/dongsoo
         if len(parts) != 3 {
             return false
         }
