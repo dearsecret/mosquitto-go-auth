@@ -422,7 +422,7 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 	username = setUsername(username, clientid)
 
 	if skipACLCache(topic) {
-		return matchNoAcl(topic, acc), nil
+		return matchNoAcl(topic, acc, username), nil
 	}
 
 	if authPlugin.useCache {
@@ -542,22 +542,37 @@ func skipACLCache(topic string) bool {
         strings.HasPrefix(topic, authPlugin.noACLPrefix)
 }
 
-func matchNoAcl(topic string, acc int) bool {
-    if acc != 1 && acc != 4 {
+func matchNoAcl(topic string, acc int, username string) bool {
+    parts := strings.Split(topic, "/")
+
+    if acc == 4 { // SUBSCRIBE
+        if len(parts) == 2 {
+            return parts[1] == "+"
+        }
+
+        if len(parts) == 3 && parts[2] == "+" {
+            _, err := strconv.ParseUint(parts[1], 10, 64)
+            return err == nil
+        }
+
         return false
     }
 
-    parts := strings.Split(topic, "/")
-    if len(parts) == 2 {
-        return parts[1] == "+"
-    }
+    if acc == 1 { // READ
+        if len(parts) != 3 {
+            return false
+        }
 
-    if len(parts) == 3 && parts[2] == "+" {
-        _, err := strconv.ParseUint(parts[1], 10, 64)
-        return err == nil
+        if _, err := strconv.ParseUint(parts[1], 10, 64); err != nil {
+            return false
+        }
+
+        if _, err := strconv.ParseUint(parts[2], 10, 64); err == nil {
+            return true
+        }
+
+        return parts[2] == username
     }
 
     return false
 }
-
-
