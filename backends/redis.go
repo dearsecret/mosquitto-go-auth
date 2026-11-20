@@ -240,6 +240,9 @@ func (o Redis) CheckAcl(username, topic, clientid string, acc int32) (bool, erro
 
 // CheckAcl gets all acls for the username and tries to match against topic, acc, and username/clientid if needed.
 func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, error) {
+	if strings.HasPrefix(topic, "ch/") {
+		return o.matchCheckHashAcl(username, topic, acc)
+	}
 
 	if acc == MOSQ_ACL_WRITE {
 		allowed, err := o.matchCommonWriteAcl(username, clientid, topic)
@@ -249,9 +252,6 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 		return true, nil
 	}
 
-	if strings.HasPrefix(topic, "ch/") {
-		return o.matchCheckHashAcl(username, topic)
-	}
 
 	// 개인 topic
 	if o.containsUsername(topic, username) {
@@ -408,20 +408,47 @@ func (o Redis) matchCommonWriteAcl(
 	return false, nil
 }
 
-func (o Redis) matchCheckHashAcl(username, topic string) (bool, error) {
-	if strings.HasSuffix(topic, "/+") {
-		topic = strings.TrimSuffix(topic, "/+")
-	}
+func (o Redis) matchCheckHashAcl(username, topic string, acc int32) (bool, error) {
+    parts := strings.Split(topic, "/")
 
-	_, err := o.conn.HGet(o.ctx, topic, username).Result()
+	if len(parts) < 2 || parts[1] == "" {
+        return false, nil
+    }
+	
+    switch acc {
+    case MOSQ_ACL_WRITE:
+        if len(parts) == 3 {
+            if parts[2] != username {
+                return false, nil
+            }
+            topic = strings.Join(parts[:2], "/")
+        } else if len(parts) != 2 {
+            return false, nil
+        }
 
-	if err == nil {
-		return true, nil
-	}
+    case MOSQ_ACL_READ:
+        if len(parts) != 2 {
+            return false, nil
+        }
 
-	if err == goredis.Nil {
-		return false, nil
-	}
+    case MOSQ_ACL_SUBSCRIBE:
+        if len(parts) == 3 && parts[2] == "+" {
+            topic = strings.Join(parts[:2], "/")
+        } else if len(parts) != 2 {
+            return false, nil
+        }
 
-	return false, err
+    default:
+        return false, nil
+    }
+
+    _, err := o.conn.HGet(o.ctx, topic, username).Result()
+
+    if err == nil {
+        return true, nil
+    }
+    if err == goredis.Nil {
+        return false, nil
+    }
+    return false, err
 }
