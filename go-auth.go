@@ -31,6 +31,7 @@ type AuthPlugin struct {
 	useClientidAsUsername bool
 	streamConsumer        *RedisStreamConsumer
 	authFailedURL         string
+	noACLPrefix 	      string
 }
 
 // errors to signal mosquitto
@@ -146,6 +147,8 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 		setCache(authOpts)
 	}
 
+	authPlugin.noACLPrefix = strings.TrimSpace(authOpts["no_acl_prefix"])
+
 	if isRedisBackendEnabled(authOpts) {
 		consumer, err := NewRedisStreamConsumer(authOpts)
 		if err != nil {
@@ -157,6 +160,7 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 		}
 	}
 }
+
 
 func setCache(authOpts map[string]string) {
 
@@ -417,6 +421,10 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
+	if skipACLCache(topic) {
+		return matchNoAcl(topic, acc), nil
+	}
+
 	if authPlugin.useCache {
 		log.Debugf("checking acl cache for %s", username)
 		cached, granted = authPlugin.cache.CheckACLRecord(
@@ -469,7 +477,6 @@ func AuthPluginCleanup() {
 	if authPlugin.cache != nil {
 		authPlugin.cache.Close()
 	}
-
 	authPlugin.backends.Halt()
 }
 
@@ -529,3 +536,28 @@ func sendAuthFailed(url, username, clientid, clientip string) {
 		log.Errorf("auth failure event returned HTTP status: %d", resp.StatusCode)
 	}
 }
+
+func skipACLCache(topic string) bool {
+    return authPlugin.noACLPrefix != "" &&
+        strings.HasPrefix(topic, authPlugin.noACLPrefix)
+}
+
+func matchNoAcl(topic string, acc int) bool {
+    if acc != 1 && acc != 4 {
+        return false
+    }
+
+    parts := strings.Split(topic, "/")
+    if len(parts) == 2 {
+        return parts[1] == "+"
+    }
+
+    if len(parts) == 3 && parts[2] == "+" {
+        _, err := strconv.ParseUint(parts[1], 10, 64)
+        return err == nil
+    }
+
+    return false
+}
+
+
