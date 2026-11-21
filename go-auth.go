@@ -148,8 +148,6 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 	}
 
 	authPlugin.noACLPrefix = strings.TrimSpace(authOpts["no_acl_prefix"])
-	log.Infof("ALL AUTH OPTIONS: %+v", authOpts)
-	log.Infof("NO ACL PREFIX: %q", authPlugin.noACLPrefix)
 
 	if isRedisBackendEnabled(authOpts) {
 		consumer, err := NewRedisStreamConsumer(authOpts)
@@ -423,12 +421,6 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
-	log.Infof(
-		"ACL CHECK topic=%q prefix=%q skip=%v",
-		topic,
-		authPlugin.noACLPrefix,
-		skipACLCache(topic),
-	)
 	if skipACLCache(topic) {
 		return matchNoAcl(topic, acc, username), nil
 	}
@@ -558,7 +550,7 @@ func matchNoAcl(topic string, acc int, username string) bool {
             return parts[1] == "+"
         }
 
-        if len(parts) == 3 && parts[2] == "+" {
+        if len(parts) == 3 && parts[2] == "#" {
             _, err := strconv.ParseUint(parts[1], 10, 64)
             return err == nil
         }
@@ -573,8 +565,8 @@ func matchNoAcl(topic string, acc int, username string) bool {
             return err == nil
         }
 
-        // no/123/456 또는 no/123/dongsoo
-        if len(parts) != 3 {
+        // no/123/456 또는 no/123/dongsoo no/123/456/dongsoo
+        if len(parts) < 3 {
             return false
         }
 
@@ -582,11 +574,15 @@ func matchNoAcl(topic string, acc int, username string) bool {
             return false
         }
 
-        if _, err := strconv.ParseUint(parts[2], 10, 64); err == nil {
-            return true
-        }
+			last := parts[len(parts)-1]
 
-        return parts[2] == username
+		// 마지막 경로가 숫자면 허용
+		if _, err := strconv.ParseUint(last, 10, 64); err == nil {
+			return true
+		}
+
+		// 숫자가 아니면 username과 일치해야 허용
+		return last == username
     }
 
     return false
