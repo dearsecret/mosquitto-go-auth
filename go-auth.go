@@ -421,6 +421,12 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
+	if acc == 1 &&
+		strings.HasSuffix(topic, "/"+username) &&
+		!strings.HasPrefix(topic, "ch/") {
+		return true, nil
+	}
+
 	if skipACLCache(topic) {
 		return matchNoAcl(topic, acc, username), nil
 	}
@@ -558,32 +564,19 @@ func matchNoAcl(topic string, acc int, username string) bool {
         return false
     }
 
-    if acc == 1 { // READ
-        // no/123
-        if len(parts) == 2 {
-            _, err := strconv.ParseUint(parts[1], 10, 64)
-            return err == nil
-        }
-
-        // no/123/456 또는 no/123/dongsoo no/123/456/dongsoo
-        if len(parts) < 3 {
-            return false
-        }
-
-        if _, err := strconv.ParseUint(parts[1], 10, 64); err != nil {
-            return false
-        }
-
-			last := parts[len(parts)-1]
-
-		// 마지막 경로가 숫자면 허용
-		if _, err := strconv.ParseUint(last, 10, 64); err == nil {
-			return true
+    if acc == 1 {
+		if len(parts) == 2 {
+			_, err := strconv.ParseUint(parts[1], 10, 64)
+			return err == nil
 		}
 
-		// 숫자가 아니면 username과 일치해야 허용
-		return last == username
-    }
+		if len(parts) == 3 {
+			_, err := strconv.ParseUint(parts[1], 10, 64)
+			return err == nil
+		}
+
+		return false
+	}
 
     return false
 }

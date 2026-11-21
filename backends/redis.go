@@ -418,24 +418,14 @@ func (o Redis) matchCheckHashAcl(username, topic string, acc int32) (bool, error
 
 	switch acc {
 	case MOSQ_ACL_SUBSCRIBE:
-		// 전체 채널 와일드카드 구독 허용
 		if parts[1] == "+" {
-			return len(parts) == 2 ||
-				(len(parts) == 3 && parts[2] == "+"), nil
+			return len(parts) == 2, nil
 		}
-
-		// 특정 채팅방의 ch/CHANNELID 또는 ch/CHANNELID/+
 		if len(parts) == 3 && parts[2] != "+" {
 			return false, nil
 		}
 
-	case MOSQ_ACL_WRITE:
-		if len(parts) == 3 && parts[2] != username {
-			return false, nil
-		}
-
 	case MOSQ_ACL_READ:
-		// 실제 메시지 토픽은 2단계 또는 3단계
 		if len(parts) == 3 && parts[2] == "" {
 			return false, nil
 		}
