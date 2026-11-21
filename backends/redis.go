@@ -252,12 +252,6 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 		return true, nil
 	}
 
-
-	// 개인 topic
-	if o.containsUsername(topic, username) {
-		return o.matchBuiltinAcl(username, topic, acc), nil
-	}
-
 	// wildcard subscription
 	if o.isWildcard(topic) {
 		return o.matchCommonWildcardAcl(topic, acc)
@@ -296,14 +290,6 @@ func (o Redis) checkAcl(username, topic, clientid string, acc int32) (bool, erro
 	return false, nil
 }
 
-func (o Redis) containsUsername(topic, username string) bool {
-	for _, level := range strings.Split(topic, "/") {
-		if level == username {
-			return true
-		}
-	}
-	return false
-}
 
 func (o Redis) isWildcard(topic string) bool {
 	return strings.ContainsAny(topic, "+#")
@@ -360,15 +346,6 @@ func (o Redis) Halt() {
 	}
 }
 
-func (o Redis) matchBuiltinAcl(username, topic string, acc int32) bool {
-	matched := topics.Match(username+"/#", topic)
-	switch acc {
-	case MOSQ_ACL_SUBSCRIBE, MOSQ_ACL_READ:
-		return matched
-	}
-
-	return false
-}
 
 func (o Redis) getCommonAclKey(acc int32) string {
 	switch acc {
@@ -429,7 +406,7 @@ func (o Redis) matchCheckHashAcl(username, topic string, acc int32) (bool, error
 		if len(parts) == 3 && parts[2] == "" {
 			return false, nil
 		}
-
+			
 	default:
 		return false, nil
 	}
