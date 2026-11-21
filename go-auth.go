@@ -148,6 +148,8 @@ func AuthPluginInit(keys []*C.char, values []*C.char, authOptsNum int, version *
 	}
 
 	authPlugin.noACLPrefix = strings.TrimSpace(authOpts["no_acl_prefix"])
+	log.Infof("ALL AUTH OPTIONS: %+v", authOpts)
+	log.Infof("NO ACL PREFIX: %q", authPlugin.noACLPrefix)
 
 	if isRedisBackendEnabled(authOpts) {
 		consumer, err := NewRedisStreamConsumer(authOpts)
@@ -421,6 +423,12 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
+	log.Infof(
+		"ACL CHECK topic=%q prefix=%q skip=%v",
+		topic,
+		authPlugin.noACLPrefix,
+		skipACLCache(topic),
+	)
 	if skipACLCache(topic) {
 		return matchNoAcl(topic, acc, username), nil
 	}
