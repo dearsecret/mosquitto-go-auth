@@ -421,9 +421,12 @@ func authAclCheck(clientid, username, topic string, acc int) (bool, error) {
 
 	username = setUsername(username, clientid)
 
-	if acc == 1 &&
-		(strings.HasPrefix(topic, username+"/") ||
-			strings.HasSuffix(topic, "/@"+username)) {
+
+	if acc == 1 && strings.HasSuffix(topic, "@") {
+		return strings.HasSuffix(topic, "/"+username+"@") , nil
+	}
+
+	if acc == 1 && strings.HasPrefix(topic, username+"/") {
 		return true, nil
 	}
 
