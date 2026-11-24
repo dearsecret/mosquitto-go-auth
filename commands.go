@@ -582,10 +582,6 @@ func (c *RedisStreamConsumer) processCommand(
 			return false, err, nil
 		}
 
-		if timestamp == "" {
-			return true, nil, nil
-		}
-
 		if err := bes.Dispatch(
 			topic,
 			[]byte(timestamp),
@@ -596,7 +592,7 @@ func (c *RedisStreamConsumer) processCommand(
 			return false, fmt.Errorf("make dispatch failed: %w", err), nil
 		}
 
-		if !deleteAfterPublish {
+		if timestamp == "" || !deleteAfterPublish {
 			return true, nil, nil
 		}
 
