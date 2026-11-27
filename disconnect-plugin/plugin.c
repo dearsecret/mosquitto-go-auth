@@ -1,4 +1,3 @@
-#include <time.h>
 #include <mosquitto_broker.h>
 #include <mosquitto_plugin.h>
 #include <mosquitto.h>
@@ -76,7 +75,10 @@ static int persist_client_update_callback(
 
     GoOnSessionUpdate(
         ed->data.username,
-        (long long)time(NULL),
+        (long long)(
+            ed->data.session_expiry_time -
+            ed->data.session_expiry_interval
+        ),
         (long long)ed->data.session_expiry_time
     );
 
