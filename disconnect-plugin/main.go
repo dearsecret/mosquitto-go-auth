@@ -117,7 +117,7 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	timestamp := time.Now().Unix()
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
 
 	if err := rdb.HSet(ctx, onlineKey, user, timestamp).Err(); err != nil {
 		log.Printf("[mosquitto-disconnect] HSET failed: %v", err)
@@ -125,7 +125,7 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] online: username=%q timestamp=%d",
+		"[mosquitto-disconnect] online: username=%q timestamp=%s",
 		user,
 		timestamp,
 	)
@@ -151,7 +151,7 @@ func GoOnOffline(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	timestamp := -time.Now().Unix()
+	timestamp := strconv.FormatInt(-time.Now().Unix(), 10)
 
 	err := rdb.HSetEXWithArgs(ctx, onlineKey, &redis.HSetEXOptions{
 		Condition:      redis.HSetEXFXX,
@@ -165,7 +165,7 @@ func GoOnOffline(username *C.char, clientID *C.char) {
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] offline: username=%q timestamp=%d ttl=%d",
+		"[mosquitto-disconnect] offline: username=%q timestamp=%s ttl=%d",
 		user,
 		timestamp,
 		onlineTTL,
