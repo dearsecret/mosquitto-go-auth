@@ -20,7 +20,18 @@ var (
 	redisOptions = make(map[string]string)
 	redisClient  *redis.Client
 	redisMu      sync.RWMutex
+
+	onlineKey = "onlines"
+	onlineTTL = 3600
 )
+
+func getRedisOption(key, fallback string) string {
+	value := redisOptions[key]
+	if value == "" {
+		return fallback
+	}
+	return value
+}
 
 //export GoSetRedisOption
 func GoSetRedisOption(key *C.char, value *C.char) {
@@ -34,28 +45,35 @@ func GoSetRedisOption(key *C.char, value *C.char) {
 //export GoInitRedis
 func GoInitRedis() C.int {
 	host := redisOptions["redis_host"]
-	port := redisOptions["redis_port"]
+	port := getRedisOption("redis_port", "6379")
 	password := redisOptions["redis_password"]
-	db := redisOptions["redis_db"]
-	stream := redisOptions["redis_event_stream"]
 
-	if host == "" || stream == "" {
-		log.Println("[mosquitto-disconnect] Redis host or event stream missing")
+	if host == "" {
+		log.Println("[mosquitto-disconnect] Redis host missing")
 		return 1
 	}
 
-	if port == "" {
-		port = "6379"
-	}
-
 	dbNumber := 3
-	if db != "" {
+	if db := redisOptions["redis_db"]; db != "" {
 		parsed, err := strconv.Atoi(db)
 		if err != nil {
 			log.Printf("[mosquitto-disconnect] Invalid Redis DB: %v", err)
 			return 1
 		}
 		dbNumber = parsed
+	}
+
+	if key := redisOptions["redis_online_key"]; key != "" {
+		onlineKey = key
+	}
+
+	if ttl := redisOptions["redis_online_ttl"]; ttl != "" {
+		parsed, err := strconv.Atoi(ttl)
+		if err != nil || parsed <= 0 {
+			log.Printf("[mosquitto-disconnect] Invalid online TTL: %q", ttl)
+			return 1
+		}
+		onlineTTL = parsed
 	}
 
 	client := redis.NewClient(&redis.Options{
@@ -69,10 +87,11 @@ func GoInitRedis() C.int {
 	redisMu.Unlock()
 
 	log.Printf(
-		"[mosquitto-disconnect] Redis initialized: %s DB=%d stream=%s",
+		"[mosquitto-disconnect] Redis initialized: %s DB=%d key=%s ttl=%d",
 		host,
 		dbNumber,
-		stream,
+		onlineKey,
+		onlineTTL,
 	)
 
 	return 0
@@ -86,7 +105,6 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	if username != nil {
 		user = C.GoString(username)
 	}
-
 	if clientID != nil {
 		client = C.GoString(clientID)
 	}
@@ -103,43 +121,26 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	stream := redisOptions["redis_event_stream"]
-
-	err := rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: stream,
-		Values: map[string]interface{}{
-			"event":     "connect",
-			"username":  user,
-			"client_id": client,
-			"timestamp": time.Now().UnixMilli(),
-		},
-	}).Err()
-
-	if err != nil {
-		log.Printf("[mosquitto-disconnect] Redis XADD failed: %v", err)
+	if err := rdb.HSet(ctx, onlineKey, user, client).Err(); err != nil {
+		log.Printf("[mosquitto-disconnect] HSET failed: %v", err)
 		return
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] connect event published: username=%q client_id=%q",
+		"[mosquitto-disconnect] online: username=%q client_id=%q",
 		user,
 		client,
 	)
 }
 
-//export GoOnDisconnect
-func GoOnDisconnect(
-	username *C.char,
-	clientID *C.char,
-	reason C.int,
-) {
+//export GoOnOffline
+func GoOnOffline(username *C.char, clientID *C.char) {
 	user := ""
 	client := ""
 
 	if username != nil {
 		user = C.GoString(username)
 	}
-
 	if clientID != nil {
 		client = C.GoString(clientID)
 	}
@@ -156,29 +157,50 @@ func GoOnDisconnect(
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	stream := redisOptions["redis_event_stream"]
-
-	err := rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: stream,
-		Values: map[string]interface{}{
-			"event":     "disconnect",
-			"username":  user,
-			"client_id": client,
-			"reason":    int(reason),
-			"timestamp": time.Now().UnixMilli(),
-		},
-	}).Err()
+	err := rdb.HSetEX(ctx, onlineKey, &redis.HSetEXOptions{
+		Expiration: time.Duration(onlineTTL) * time.Second,
+		Condition:  redis.HSetEXConditionFXX,
+	}, user, client).Err()
 
 	if err != nil {
-		log.Printf("[mosquitto-disconnect] Redis XADD failed: %v", err)
+		log.Printf("[mosquitto-disconnect] HSETEX offline failed: %v", err)
 		return
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] disconnect event published: username=%q client_id=%q",
+		"[mosquitto-disconnect] offline: username=%q client_id=%q ttl=%d",
 		user,
 		client,
+		onlineTTL,
 	)
+}
+
+//export GoOnDisconnect
+func GoOnDisconnect(username *C.char, clientID *C.char) {
+	user := ""
+
+	if username != nil {
+		user = C.GoString(username)
+	}
+
+	redisMu.RLock()
+	rdb := redisClient
+	redisMu.RUnlock()
+
+	if rdb == nil {
+		log.Println("[mosquitto-disconnect] Redis client unavailable")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := rdb.HDel(ctx, onlineKey, user).Err(); err != nil {
+		log.Printf("[mosquitto-disconnect] HDEL failed: %v", err)
+		return
+	}
+
+	log.Printf("[mosquitto-disconnect] disconnect: username=%q", user)
 }
 
 //export GoCloseRedis

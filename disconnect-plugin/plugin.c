@@ -1,4 +1,3 @@
-
 #include <mosquitto_broker.h>
 #include <mosquitto_plugin.h>
 #include <mosquitto.h>
@@ -58,6 +57,27 @@ static int disconnect_callback(int event, void *event_data, void *userdata)
     GoOnDisconnect(
         (char *)username,
         (char *)client_id,
+        ed->reason
+    );
+
+    return MOSQ_ERR_SUCCESS;
+}
+
+/* CLIENT_OFFLINE callback */
+static int client_offline_callback(int event, void *event_data, void *userdata)
+{
+    struct mosquitto_evt_client_offline *ed = event_data;
+
+    (void)event;
+    (void)userdata;
+
+    if (ed == NULL || ed->client == NULL) {
+        return MOSQ_ERR_SUCCESS;
+    }
+
+    GoOnDisconnect(
+        (char *)mosquitto_client_username(ed->client),
+        (char *)mosquitto_client_id(ed->client),
         ed->reason
     );
 
@@ -140,6 +160,34 @@ int mosquitto_plugin_init(
         return rc;
     }
 
+    /* CLIENT_OFFLINE callback 등록 */
+    rc = mosquitto_callback_register(
+        mosq_pid,
+        MOSQ_EVT_CLIENT_OFFLINE,
+        client_offline_callback,
+        NULL,
+        NULL
+    );
+
+    if (rc != MOSQ_ERR_SUCCESS) {
+        mosquitto_callback_unregister(
+            mosq_pid,
+            MOSQ_EVT_DISCONNECT,
+            disconnect_callback,
+            NULL
+        );
+
+        mosquitto_callback_unregister(
+            mosq_pid,
+            MOSQ_EVT_CONNECT,
+            connect_callback,
+            NULL
+        );
+
+        GoCloseRedis();
+        return rc;
+    }
+
     return MOSQ_ERR_SUCCESS;
 }
 
@@ -155,8 +203,8 @@ int mosquitto_plugin_cleanup(
 
     mosquitto_callback_unregister(
         mosq_pid,
-        MOSQ_EVT_CONNECT,
-        connect_callback,
+        MOSQ_EVT_CLIENT_OFFLINE,
+        client_offline_callback,
         NULL
     );
 
@@ -164,6 +212,13 @@ int mosquitto_plugin_cleanup(
         mosq_pid,
         MOSQ_EVT_DISCONNECT,
         disconnect_callback,
+        NULL
+    );
+
+    mosquitto_callback_unregister(
+        mosq_pid,
+        MOSQ_EVT_CONNECT,
+        connect_callback,
         NULL
     );
 
