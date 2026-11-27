@@ -100,13 +100,9 @@ func GoInitRedis() C.int {
 //export GoOnConnect
 func GoOnConnect(username *C.char, clientID *C.char) {
 	user := ""
-	client := ""
 
 	if username != nil {
 		user = C.GoString(username)
-	}
-	if clientID != nil {
-		client = C.GoString(clientID)
 	}
 
 	redisMu.RLock()
@@ -121,28 +117,26 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	if err := rdb.HSet(ctx, onlineKey, user, client).Err(); err != nil {
+	timestamp := time.Now().Unix()
+
+	if err := rdb.HSet(ctx, onlineKey, user, timestamp).Err(); err != nil {
 		log.Printf("[mosquitto-disconnect] HSET failed: %v", err)
 		return
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] online: username=%q client_id=%q",
+		"[mosquitto-disconnect] online: username=%q timestamp=%d",
 		user,
-		client,
+		timestamp,
 	)
 }
 
 //export GoOnOffline
 func GoOnOffline(username *C.char, clientID *C.char) {
 	user := ""
-	client := ""
 
 	if username != nil {
 		user = C.GoString(username)
-	}
-	if clientID != nil {
-		client = C.GoString(clientID)
 	}
 
 	redisMu.RLock()
@@ -157,10 +151,13 @@ func GoOnOffline(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	err := rdb.HSetEX(ctx, onlineKey, &redis.HSetEXOptions{
-		Expiration: time.Duration(onlineTTL) * time.Second,
-		Condition:  redis.HSetEXConditionFXX,
-	}, user, client).Err()
+	timestamp := -time.Now().Unix()
+
+	err := rdb.HSetEXWithArgs(ctx, onlineKey, &redis.HSetEXOptions{
+		Condition:      redis.HSetEXFXX,
+		ExpirationType: redis.HSetEXExpirationEX,
+		ExpirationVal:  int64(onlineTTL),
+	}, user, timestamp).Err()
 
 	if err != nil {
 		log.Printf("[mosquitto-disconnect] HSETEX offline failed: %v", err)
@@ -168,9 +165,9 @@ func GoOnOffline(username *C.char, clientID *C.char) {
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] offline: username=%q client_id=%q ttl=%d",
+		"[mosquitto-disconnect] offline: username=%q timestamp=%d ttl=%d",
 		user,
-		client,
+		timestamp,
 		onlineTTL,
 	)
 }
