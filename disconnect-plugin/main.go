@@ -122,19 +122,21 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 }
 
 //export GoOnSessionUpdate
-func GoOnSessionUpdate(username *C.char, expiryTime C.longlong) {
+func GoOnSessionUpdate(username *C.char, eventTime C.longlong, expiryTime C.longlong) {
 	user := ""
 
 	if username != nil {
 		user = C.GoString(username)
 	}
 
+	event := int64(eventTime)
 	expiry := int64(expiryTime)
 
-	if user == "" || expiry <= time.Now().Unix() {
+	if user == "" || event <= 0 || expiry <= time.Now().Unix() {
 		log.Printf(
-			"[mosquitto-disconnect] invalid session update: username=%q expiry=%d",
+			"[mosquitto-disconnect] invalid session update: username=%q event=%d expiry=%d",
 			user,
+			event,
 			expiry,
 		)
 		return
@@ -152,7 +154,7 @@ func GoOnSessionUpdate(username *C.char, expiryTime C.longlong) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	timestamp := strconv.FormatInt(expiry, 10)
+	timestamp := strconv.FormatInt(event, 10)
 
 	err := rdb.HSetEXWithArgs(ctx, onlineKey, &redis.HSetEXOptions{
 		Condition:      redis.HSetEXFXX,
@@ -166,8 +168,9 @@ func GoOnSessionUpdate(username *C.char, expiryTime C.longlong) {
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] session updated: username=%q expiry=%d",
+		"[mosquitto-disconnect] session updated: username=%q event=%d expiry=%d",
 		user,
+		event,
 		expiry,
 	)
 }

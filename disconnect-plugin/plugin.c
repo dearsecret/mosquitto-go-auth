@@ -1,3 +1,4 @@
+#include <time.h>
 #include <mosquitto_broker.h>
 #include <mosquitto_plugin.h>
 #include <mosquitto.h>
@@ -11,7 +12,11 @@ extern void GoCloseRedis(void);
 
 extern void GoOnConnect(char *username, char *client_id);
 extern void GoOnDisconnect(char *username, char *client_id);
-extern void GoOnSessionUpdate(char *username, long long expiry_time);
+extern void GoOnSessionUpdate(
+    char *username,
+    long long event_time,
+    long long expiry_time
+);
 
 /* CONNECT callback */
 static int connect_callback(int event, void *event_data, void *userdata)
@@ -71,6 +76,7 @@ static int persist_client_update_callback(
 
     GoOnSessionUpdate(
         ed->data.username,
+        (long long)time(NULL),
         (long long)ed->data.session_expiry_time
     );
 
