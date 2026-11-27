@@ -22,7 +22,6 @@ var (
 	redisMu      sync.RWMutex
 
 	onlineKey = "onlines"
-	onlineTTL = 3600
 )
 
 func getRedisOption(key, fallback string) string {
@@ -67,14 +66,6 @@ func GoInitRedis() C.int {
 		onlineKey = key
 	}
 
-	if ttl := redisOptions["redis_online_ttl"]; ttl != "" {
-		parsed, err := strconv.Atoi(ttl)
-		if err != nil || parsed <= 0 {
-			log.Printf("[mosquitto-disconnect] Invalid online TTL: %q", ttl)
-			return 1
-		}
-		onlineTTL = parsed
-	}
 
 	client := redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", host, port),
@@ -87,11 +78,10 @@ func GoInitRedis() C.int {
 	redisMu.Unlock()
 
 	log.Printf(
-		"[mosquitto-disconnect] Redis initialized: %s DB=%d key=%s ttl=%d",
+		"[mosquitto-disconnect] Redis initialized: %s DB=%d key=%s",
 		host,
 		dbNumber,
 		onlineKey,
-		onlineTTL,
 	)
 
 	return 0
@@ -131,12 +121,23 @@ func GoOnConnect(username *C.char, clientID *C.char) {
 	)
 }
 
-//export GoOnOffline
-func GoOnOffline(username *C.char, clientID *C.char) {
+//export GoOnSessionUpdate
+func GoOnSessionUpdate(username *C.char, expiryTime C.longlong) {
 	user := ""
 
 	if username != nil {
 		user = C.GoString(username)
+	}
+
+	expiry := int64(expiryTime)
+
+	if user == "" || expiry <= time.Now().Unix() {
+		log.Printf(
+			"[mosquitto-disconnect] invalid session update: username=%q expiry=%d",
+			user,
+			expiry,
+		)
+		return
 	}
 
 	redisMu.RLock()
@@ -151,24 +152,23 @@ func GoOnOffline(username *C.char, clientID *C.char) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	timestamp := strconv.FormatInt(-time.Now().Unix(), 10)
+	timestamp := strconv.FormatInt(expiry, 10)
 
 	err := rdb.HSetEXWithArgs(ctx, onlineKey, &redis.HSetEXOptions{
 		Condition:      redis.HSetEXFXX,
-		ExpirationType: redis.HSetEXExpirationEX,
-		ExpirationVal:  int64(onlineTTL),
+		ExpirationType: redis.HSetEXExpirationEXAT,
+		ExpirationVal:  expiry,
 	}, user, timestamp).Err()
 
 	if err != nil {
-		log.Printf("[mosquitto-disconnect] HSETEX offline failed: %v", err)
+		log.Printf("[mosquitto-disconnect] HSETEX session update failed: %v", err)
 		return
 	}
 
 	log.Printf(
-		"[mosquitto-disconnect] offline: username=%q timestamp=%s ttl=%d",
+		"[mosquitto-disconnect] session updated: username=%q expiry=%d",
 		user,
-		timestamp,
-		onlineTTL,
+		expiry,
 	)
 }
 
@@ -214,3 +214,12 @@ func GoCloseRedis() {
 }
 
 func main() {}
+
+
+// MOSQ_EVT_PERSIST_CLIENT_ADD	세션 추가
+// MOSQ_EVT_PERSIST_CLIENT_UPDATE	세션 정보 변경
+// MOSQ_EVT_PERSIST_CLIENT_DELETE	세션 삭제
+// MOSQ_EVT_PERSIST_SUBSCRIPTION_ADD	구독 추가
+// MOSQ_EVT_PERSIST_SUBSCRIPTION_DELETE	구독 삭제
+// MOSQ_EVT_SUBSCRIBE
+// MOSQ_EVT_UNSUBSCRIBE

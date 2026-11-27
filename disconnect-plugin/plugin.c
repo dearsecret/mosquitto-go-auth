@@ -10,14 +10,13 @@ extern int GoInitRedis(void);
 extern void GoCloseRedis(void);
 
 extern void GoOnConnect(char *username, char *client_id);
-extern void GoOnDisconnect(char *username, char *client_id, int reason);
+extern void GoOnDisconnect(char *username, char *client_id);
+extern void GoOnSessionUpdate(char *username, long long expiry_time);
 
 /* CONNECT callback */
 static int connect_callback(int event, void *event_data, void *userdata)
 {
     struct mosquitto_evt_connect *ed = event_data;
-    const char *username;
-    const char *client_id;
 
     (void)event;
     (void)userdata;
@@ -26,12 +25,9 @@ static int connect_callback(int event, void *event_data, void *userdata)
         return MOSQ_ERR_SUCCESS;
     }
 
-    username = mosquitto_client_username(ed->client);
-    client_id = mosquitto_client_id(ed->client);
-
     GoOnConnect(
-        (char *)username,
-        (char *)client_id
+        (char *)mosquitto_client_username(ed->client),
+        (char *)mosquitto_client_id(ed->client)
     );
 
     return MOSQ_ERR_SUCCESS;
@@ -41,32 +37,6 @@ static int connect_callback(int event, void *event_data, void *userdata)
 static int disconnect_callback(int event, void *event_data, void *userdata)
 {
     struct mosquitto_evt_disconnect *ed = event_data;
-    const char *username;
-    const char *client_id;
-
-    (void)event;
-    (void)userdata;
-
-    if (ed == NULL || ed->client == NULL) {
-        return MOSQ_ERR_SUCCESS;
-    }
-
-    username = mosquitto_client_username(ed->client);
-    client_id = mosquitto_client_id(ed->client);
-
-    GoOnDisconnect(
-        (char *)username,
-        (char *)client_id,
-        ed->reason
-    );
-
-    return MOSQ_ERR_SUCCESS;
-}
-
-/* CLIENT_OFFLINE callback */
-static int client_offline_callback(int event, void *event_data, void *userdata)
-{
-    struct mosquitto_evt_client_offline *ed = event_data;
 
     (void)event;
     (void)userdata;
@@ -77,8 +47,31 @@ static int client_offline_callback(int event, void *event_data, void *userdata)
 
     GoOnDisconnect(
         (char *)mosquitto_client_username(ed->client),
-        (char *)mosquitto_client_id(ed->client),
-        ed->reason
+        (char *)mosquitto_client_id(ed->client)
+    );
+
+    return MOSQ_ERR_SUCCESS;
+}
+
+/* PERSIST CLIENT UPDATE callback */
+static int persist_client_update_callback(
+    int event,
+    void *event_data,
+    void *userdata
+)
+{
+    struct mosquitto_evt_persist_client *ed = event_data;
+
+    (void)event;
+    (void)userdata;
+
+    if (ed == NULL) {
+        return MOSQ_ERR_SUCCESS;
+    }
+
+    GoOnSessionUpdate(
+        ed->data.username,
+        (long long)ed->data.session_expiry_time
     );
 
     return MOSQ_ERR_SUCCESS;
@@ -160,11 +153,11 @@ int mosquitto_plugin_init(
         return rc;
     }
 
-    /* CLIENT_OFFLINE callback 등록 */
+    /* PERSIST CLIENT UPDATE callback 등록 */
     rc = mosquitto_callback_register(
         mosq_pid,
-        MOSQ_EVT_CLIENT_OFFLINE,
-        client_offline_callback,
+        MOSQ_EVT_PERSIST_CLIENT_UPDATE,
+        persist_client_update_callback,
         NULL,
         NULL
     );
@@ -203,8 +196,8 @@ int mosquitto_plugin_cleanup(
 
     mosquitto_callback_unregister(
         mosq_pid,
-        MOSQ_EVT_CLIENT_OFFLINE,
-        client_offline_callback,
+        MOSQ_EVT_PERSIST_CLIENT_UPDATE,
+        persist_client_update_callback,
         NULL
     );
 
